@@ -21,7 +21,7 @@ jobs:
       - name: Check for the API key
         id: key
         run: echo "present=${{ secrets.ANTHROPIC_API_KEY != '' }}" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         if: steps.key.outputs.present == 'true'
         with:
           fetch-depth: 0
