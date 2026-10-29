@@ -6,6 +6,8 @@ All notable changes to LABRAT are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-30
+
 ### Added
 
 - Device catalog: profiles that recognise a model by USB ID, `*IDN?` or a probe, describe it for an existing
@@ -60,5 +62,6 @@ First release of LABRAT as a nest, rats and one message API.
 - An install script and systemd units for nests and rats.
 - Adoption and address changes that send a rat's key only after the rat proves it holds it (HMAC challenge).
 
-[Unreleased]: https://github.com/reinhardjvv/labrat/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/reinhardjvv/labrat/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/reinhardjvv/labrat/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/reinhardjvv/labrat/releases/tag/v0.1.0
