@@ -493,6 +493,116 @@ def cmd_user(a):
         print(f"removed {st.bold(a.name)}: their token no longer works, their locks are released")
 
 
+def _bench_rat(a) -> str | None:
+    return getattr(a, "rat", None)
+
+
+def cmd_scan(a):
+    from .term import table
+    st, rows = _st(), _client(a).scan(_bench_rat(a), a.probe)
+    if a.json:
+        return _show(rows)
+    out = []
+    for r in rows:
+        fits = []
+        for p in r["profiles"]:
+            mark = {True: st.good(" confirmed"), False: st.bad(" did not answer as expected"), None: ""}[p["confirmed"]]
+            fits.append(st.accent(p["profile"]) + mark)
+        state = st.warn("in use") if r["in_use"] else ", ".join(fits) or st.dim("no profile; labrat probe can look")
+        out.append([", ".join(r["files"]) or st.dim("no device file"), r.get("usb", ""), " ".join(x for x in (r.get("manufacturer"), r.get("product")) if x), state])
+    print(table(["FILES", "USB", "WHAT", "PROFILE"], out, st, indent=0) if out else "nothing plugged in")
+
+
+def cmd_probe(a):
+    from .term import table
+    st = _st()
+    r = _client(a).probe(a.target, _bench_rat(a), a.protocol, a.send or None, a.baud, a.line_ending)
+    if a.json:
+        return _show(r)
+    settings = " ".join(f"{k} {v}" for k, v in (r.get("settings") or {}).items())
+    print(f"{st.bold(r['target'])}  {r['protocol']}  {st.dim(settings)}")
+    rows = []
+    for x in r["exchanges"]:
+        if "address" in x:
+            rows.append([st.bold(x["address"]), st.dim(x.get("commonly", "")), ""])
+            continue
+        reply = x.get("reply")
+        shown = st.value(reply[:90]) if reply else st.dim(x.get("error") or f"HTTP {x.get('status', '')}")
+        rows.append([x.get("send", ""), shown, st.dim(f"{x['ms']} ms") if "ms" in x else ""])
+    head = ["ADDRESS", "OFTEN", ""] if r["protocol"] == "i2c" else ["SENT", "REPLY", ""]
+    print(table(head, rows, st) if rows else "  nothing answered")
+    for n in r.get("notes", []):
+        print(st.dim(f"  {n}"))
+    for p in r.get("profiles", []):
+        print(f"  {st.good('fits')} {st.accent(p['profile'])}: labrat profile try {p['profile']} --port {a.target}")
+    print(st.dim(f"  kept as {r.get('file', '')}"))
+
+
+def cmd_capture(a):
+    st, client = _st(), _client(a)
+    if a.action == "start":
+        r = client.capture("start", a.kind, a.target, _bench_rat(a), a.baud)
+        tip = f"point the vendor software at {st.bold(r['connect_to'])}" if r.get("connect_to") else "use the vendor software now"
+        return print(f"capturing {r['target']}: {tip}, then run labrat capture stop")
+    if a.action == "stop":
+        r = client.capture("stop", target=a.target, rat=_bench_rat(a))
+        return print(f"{r['exchanges']} exchanges in {r['seconds']} s, kept as {st.bold(r['file'])}"
+                     + (f"\n{st.bad(r['error'])}" if r.get("error") else ""))
+    _show(client.capture("status", rat=_bench_rat(a)))
+
+
+def cmd_profiles(a):
+    from .term import table
+    st, rows = _st(), _client(a).profiles(" ".join(a.select) or None, _bench_rat(a))
+    if a.json:
+        return _show(rows)
+    print(table(["PROFILE", "KIND", "DRIVER", "STATUS", "RECORDED", "MATCHES", "ABOUT"],
+                [[st.accent(r["profile"]), r["kind"], r["driver"], st.good("tested") if r["status"] == "tested" else st.warn("draft"),
+                  str(r["recordings"]) if r["recordings"] else st.dim("0"), st.dim(", ".join("usb " + u for u in r["usb"])),
+                  st.dim(r["description"][:60])] for r in rows], st, indent=0) if rows else "no profiles match")
+
+
+def _device_settings(a) -> dict:
+    out = {k: v for k, v in (("port", a.port), ("address", a.address), ("url", a.device_url)) if v}
+    if a.simulate:
+        out["simulate"] = True
+    for kv in a.set or []:
+        k, _, v = kv.partition("=")
+        out[k] = _value(v)
+    return out
+
+
+def cmd_profile(a):
+    from .term import quantity, table
+    st, client = _st(), _client(a)
+    text = Path(a.profile).read_text(encoding="utf-8") if a.profile and Path(a.profile).is_file() else None
+    if a.action == "show":
+        r = client.profile(a.profile, _bench_rat(a))
+        return _show(r) if a.json else print(r["toml"], end="")
+    if a.action == "try":
+        r = client.try_profile(text or a.profile, _bench_rat(a), **_device_settings(a))
+        if a.json:
+            return _show(r)
+        rows = [[st.bold(k), quantity(v, "", st)] for k, v in r["readings"].items()]
+        rows += [[st.bold(k), st.bad(v)] for k, v in r["problems"].items()]
+        print(f"{st.accent(r['profile'])}  {st.good(r['verdict']) if not r['problems'] else st.warn(r['verdict'])}")
+        return print(table(["ATTRIBUTE", "READ"], rows, st))
+    if not text:
+        raise LabratError("bad_request", f"{a.profile}: give the profile as a .toml file")
+    r = client.save_profile(text, a.transcript, a.overwrite, _bench_rat(a))
+    print(f"saved {st.accent(r['profile'])} ({r['status']}) to {r['file']}, {r['recordings']} recordings"
+          + (f", {r['recordings_added']} from transcripts" if r["recordings_added"] else ""))
+
+
+def cmd_add(a):
+    cfg = {"profile": a.profile} if a.profile else {}
+    if a.driver:
+        cfg["driver"] = a.driver
+    r = _client(a).add_device(a.name, **cfg, **_device_settings(a))
+    made = " ".join(x for x in (r.get("manufacturer"), r.get("model")) if x)
+    print(f"added {_st().bold(r['device'])}  {r.get('kind', '')}  {made}  {_st().dim('from ' + r['profile']) if r.get('profile') else ''}".rstrip())
+
+
 def cmd_approvals(a):
     from .term import table
     st, rows = _st(), _client(a).approvals()
@@ -637,6 +747,27 @@ def main(argv=None) -> int:
                (("action",), {"choices": ["add", "remove"]}), "name",
                (("--role",), {"choices": ROLES, "default": "operator"}),
                (("--for",), {"dest": "for_", "help": "the person this user (an AI agent, say) works for"}))
+    rat = (("--rat",), {"help": "run it on this rat (where the device is plugged in)"})
+    dev = [(("--port",), {}), (("--address",), {}), (("--device-url",), {"dest": "device_url", "help": "for http devices"}), (("--simulate",), {"action": "store_true", "help": "answer from the recordings"}),
+           (("--set",), {"action": "append", "metavar": "KEY=VALUE", "help": "any other device setting"})]
+    client_cmd("scan", "what is plugged in, and the profiles that fit it", cmd_scan, rat,
+               (("--probe",), {"action": "store_true", "help": "confirm with each profile's read-only query"}), js)
+    client_cmd("probe", "ask a device safe questions and keep its answers", cmd_probe, "target", rat,
+               (("--protocol",), {"choices": ["auto", "scpi", "megatec", "text"], "default": "auto"}),
+               (("--send",), {"action": "append", "help": "a query to send as well (anything else waits for approval)"}),
+               (("--baud",), {"type": int}), (("--line-ending",), {"choices": ["lf", "cr", "crlf"]}), js)
+    client_cmd("capture", "record what the vendor's software says to a device", cmd_capture,
+               (("action",), {"nargs": "?", "choices": ["start", "stop", "status"], "default": "status"}),
+               (("kind",), {"nargs": "?", "choices": ["serial", "usb"]}), (("target",), {"nargs": "?"}), rat,
+               (("--baud",), {"type": int}))
+    client_cmd("profiles", "the device profiles in the catalog", cmd_profiles, (("select",), {"nargs": "*"}), rat, js)
+    client_cmd("profile", "show a profile, try one on the real device, or save one", cmd_profile,
+               (("action",), {"choices": ["show", "try", "save"]}), (("profile",), {"help": "an id from the catalog, or a .toml file"}),
+               rat, *dev, (("--transcript",), {"action": "append", "help": "a probe or capture whose replies become recordings"}),
+               (("--overwrite",), {"action": "store_true"}), js)
+    client_cmd("add", "add a device while the nest runs (admins); rat/name adds it on a rat", cmd_add, "name",
+               (("--profile",), {}), (("--driver",), {}), *dev)
+    client_cmd("remove", "remove a device added with labrat add", lambda a: _show(_client(a).remove_device(a.name)), "name")
     client_cmd("approve", "approve a waiting request (it then runs)", lambda a: _show(_client(a).approve(a.id)), "id")
     client_cmd("deny", "deny a waiting request", lambda a: _show(_client(a).deny(a.id)), "id")
     client_cmd("adopt", "adopt a rat; the key is asked for, or read from LABRAT_RAT_KEY", cmd_adopt, "name",

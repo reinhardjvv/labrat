@@ -3,7 +3,7 @@
 A template holds {value} and, in functions, {<argument>}. Only those names are replaced, so JSON bodies such as
 '{"on": {value}}' need no escaping. A reply is turned into a value in this order: a regular expression
 (reply, first group), a JSON path (json, such as "state.bri" or "lights.0.on"), the on and off words for
-booleans, and scale and offset for numbers.
+booleans, a map from codes to words (map = { L = "Line" }), and scale and offset for numbers.
 """
 from __future__ import annotations
 
@@ -89,6 +89,8 @@ def parse(raw: Any, spec: dict, kind: str, what: str) -> Any:
         raw = pick(raw, str(spec["json"]), what)
     if isinstance(raw, str):
         raw = raw.strip()
+    if isinstance(spec.get("map"), dict):                  # codes to words: { L = "Line", B = "Battery" }
+        raw = spec["map"].get(str(raw), raw)
     if kind == "bool" and ("on" in spec or "off" in spec):
         if str(raw) == str(spec.get("on", "")):
             return True

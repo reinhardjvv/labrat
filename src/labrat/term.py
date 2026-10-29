@@ -88,9 +88,11 @@ def span(spec: dict) -> str:
 SHELL_HELP = """commands: devices, describe <device>, get <device> <attribute> [-c ch], set <device> <attribute> <value> [-c ch],
           call <device> <function> [k=v ...] [-c ch], watch <device> [attribute ...], lock, unlock, rats,
           approvals, approve <id>, deny <id>, record [start|stop|status] <name>, experiment [start|stop|note|status],
-          experiments, files [path], who, users, stop, help, exit. Tab completes commands, devices and names."""
+          experiments, files [path], who, users, scan, probe <target>, capture, profiles, profile show|try|save,
+          add <device> --profile, remove <device>, stop, help, exit. Tab completes commands, devices and names."""
 COMMANDS = ["devices", "describe", "get", "set", "call", "watch", "lock", "unlock", "rats", "approvals", "approve", "deny", "record",
-            "experiment", "experiments", "files", "who", "users", "stop", "help", "exit"]
+            "experiment", "experiments", "files", "who", "users", "scan", "probe", "capture", "profiles", "profile",
+            "add", "remove", "stop", "help", "exit"]
 
 
 def shell(client, run) -> int:

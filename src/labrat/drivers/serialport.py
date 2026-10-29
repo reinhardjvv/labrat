@@ -2,7 +2,8 @@
 
     [devices.pump]
     driver = "serial"
-    port = "/dev/ttyUSB0"                  # or a pyserial URL: socket://192.0.2.40:4001, rfc2217://...
+    port = "/dev/ttyUSB0"                  # or a pyserial URL (socket://192.0.2.40:4001, rfc2217://...),
+                                           # hid:///dev/hidraw0 for a USB HID bridge, replay://<profile> to simulate
     baud = 9600
     parity = "none"                        # none, even, odd
     line_ending = "crlf"                   # what the device expects after a command: lf, cr or crlf
@@ -32,7 +33,7 @@ settings, the line ending and that the device is not asked *IDN? unless identify
 from __future__ import annotations
 
 from ..message import LabratError
-from .scpi import Scpi, SerialTransport
+from .scpi import HidTransport, ReplayTransport, Scpi, SerialTransport
 
 EOL = {"lf": b"\n", "cr": b"\r", "crlf": b"\r\n"}
 PARITY = {"none": "N", "even": "E", "odd": "O", "mark": "M", "space": "S"}
@@ -56,5 +57,9 @@ class Serial(Scpi):
                     "parity": PARITY[str(c.get("parity", "none"))], "stopbits": float(c.get("stop_bits", 1))}
         if settings["stopbits"].is_integer():
             settings["stopbits"] = int(settings["stopbits"])
-        return SerialTransport(f"serial://{c['port']}", float(c.get("timeout", 2.0)), str(c["port"]), settings,
-                               EOL[eol], EOL[read_eol][-1:])
+        port, timeout = str(c["port"]), float(c.get("timeout", 2.0))
+        if port.startswith("hid://"):                         # a USB HID bridge, such as a UPS's
+            return HidTransport(port, timeout, EOL[eol], EOL[read_eol][-1:], int(c.get("report_size", 8)))
+        if port.startswith("replay://"):
+            return ReplayTransport(port, timeout)
+        return SerialTransport(f"serial://{port}", timeout, port, settings, EOL[eol], EOL[read_eol][-1:])

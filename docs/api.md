@@ -61,6 +61,11 @@ Unknown fields are refused, which catches typing mistakes.
 | `experiment` | `args.action` | viewer, operator to start, stop or note | `list` (yours, or `args.person` for an admin, `*` for all), `status`, `start` with `name` and `args.description`, `note` with `args.text`, or `stop` ([experiments.md](experiments.md)) |
 | `who` | | viewer | the devices someone holds or has changed: holder, minutes left, and the last change (who, when, what), and when each person was last active |
 | `users` | `args.action` | viewer to list, admin to add or remove | `list`, `add` with `name`, `args.role` and `args.for` (the reply holds the new token, once), or `remove` with `name` (nest only) |
+| `scan` | | viewer, operator with `args.probe` | what is plugged in and the profiles that fit; `args.rat` runs it on a rat ([catalog](catalog.md)) |
+| `probe` | `args.target` | operator | safe questions to a device: `args.protocol`, `args.baud`, `args.line_ending`, `args.sends` (non-queries wait for approval) |
+| `capture` | `args.action` | operator | `start` with `args.kind` (`serial` or `usb`) and `args.target`, `status`, or `stop`, which saves the transcript |
+| `profile` | `args.action` | viewer to list or show, operator to try or save | `list` (`args.select`), `show` with `name`, `try` with `name` or `args.toml` and `args.device`, `save` with `args.toml` and `args.transcripts` |
+| `device` | `name`, `args.action` | admin | `add` with `args.config` (a profile or driver and its settings), or `remove`; `rat/name` acts on a rat |
 | `files` | | viewer | with `name` a path in your folder: a folder's files, or part of a file (`args.offset`, `args.length`, up to 4 MB) as `text` or `base64`, with `more`. Admins may give `args.person` |
 | `approvals` | | viewer | requests waiting for a person |
 | `approval` | `name` (the id) | viewer | one request's state: pending, approved with its result, denied, failed or expired |

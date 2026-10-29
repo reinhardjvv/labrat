@@ -201,6 +201,47 @@ class Client:
     def remove_user(self, name: str) -> dict:
         return self.request("users", name=name, args={"action": "remove"})
 
+    # -- the workbench: from an unknown device to a profile and a device ----------------------------------
+    def _on(self, rat: str | None, **args) -> dict:
+        return {k: v for k, v in {**args, "rat": rat}.items() if v is not None}
+
+    def scan(self, rat: str | None = None, probe: bool = False) -> list[dict]:
+        """What is plugged in on the nest (or a rat), with the catalog profiles that fit."""
+        return self.request("scan", args=self._on(rat, probe=probe or None))
+
+    def probe(self, target: str, rat: str | None = None, protocol: str | None = None, sends: list[str] | None = None,
+              baud: int | None = None, line_ending: str | None = None) -> dict:
+        """Safe questions to a device, and its answers: a transcript."""
+        return self.request("probe", args=self._on(rat, target=target, protocol=protocol, sends=sends, baud=baud, line_ending=line_ending))
+
+    def capture(self, action: str = "status", kind: str | None = None, target: str | None = None, rat: str | None = None,
+                baud: int | None = None):
+        return self.request("capture", args=self._on(rat, action=action, kind=kind, target=target, baud=baud))
+
+    def profiles(self, select: str | None = None, rat: str | None = None) -> list[dict]:
+        return self.request("profile", args=self._on(rat, action="list", select=select))
+
+    def profile(self, profile_id: str, rat: str | None = None) -> dict:
+        return self.request("profile", name=profile_id, args=self._on(rat, action="show"))
+
+    def try_profile(self, profile: str, rat: str | None = None, **device) -> dict:
+        """Read every attribute a profile describes from the real device, changing nothing. profile is an id from
+        the catalog or a whole profile as TOML text; device holds the port or address and any overrides."""
+        args = {"toml": profile} if "\n" in profile else {}
+        return self.request("profile", name=None if args else profile, args=self._on(rat, action="try", device=device, **args))
+
+    def save_profile(self, toml: str, transcripts: list[str] | None = None, overwrite: bool = False, rat: str | None = None) -> dict:
+        """Put a profile in the catalog, with the replies of the named probes and captures as its recordings."""
+        return self.request("profile", args=self._on(rat, action="save", toml=toml, transcripts=transcripts, overwrite=overwrite or None))
+
+    def add_device(self, name: str, rat: str | None = None, **config) -> dict:
+        """A device added while the nest runs (admins only), such as add_device("ups", profile="mecer/me-2000-wpru",
+        port="hid:///dev/hidraw0"). A name like bench-rat/ups adds it on that rat."""
+        return self.request("device", name=name, args=self._on(rat, action="add", config=config))
+
+    def remove_device(self, name: str) -> dict:
+        return self.request("device", name=name, args={"action": "remove"})
+
     def rats(self) -> list[dict]:
         return self.request("rats")
 

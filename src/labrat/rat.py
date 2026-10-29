@@ -57,6 +57,8 @@ class Rat(Hub):
     role = "rat"
 
     def __init__(self, cfg: dict, devices: dict | None = None):
+        from .catalog import configure
+        configure(cfg.get("catalog") or [Path(cfg["state_dir"]) / "profiles"])
         self.key = load_or_create_key(cfg["state_dir"])
         self.fingerprint = fingerprint(self.key)
         tokens = conf.tokens(cfg)
@@ -71,6 +73,8 @@ class Rat(Hub):
             from .record import Recorder
             from .store import stores_from
             self.recorder = Recorder(self, stores_from(cfg), cfg.get("recordings") or {})
+        from .bench import Workbench
+        self.bench = Workbench(self, Path(cfg["state_dir"]))
         self.watchdog_s = float(cfg.get("watchdog_s") or 0)
         self.last_seen = time.monotonic()
         self.armed = True                         # after a restart, outputs may still be on from before

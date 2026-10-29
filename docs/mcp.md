@@ -45,6 +45,8 @@ Claude Desktop and other clients, in their MCP configuration:
 | `labrat_stop` | `stop`, with the reason marked as coming from an AI agent |
 | `labrat_rats` | `rats` |
 | `labrat_approval` | `approval`, to follow a request that waits for a person |
+| `labrat_scan`, `labrat_probe`, `labrat_capture` | find, question and record unknown devices ([catalog](catalog.md)) |
+| `labrat_profiles`, `labrat_try_profile`, `labrat_save_profile` | read the catalog, try a draft profile on the real device, save it |
 | `labrat_who` | `who`: who holds each device and who changed it last |
 | `labrat_record` | `record`: list, start, stop and follow recordings to storage |
 | `labrat_experiment` | `experiment`: start, note and stop an experiment in the person's folder |

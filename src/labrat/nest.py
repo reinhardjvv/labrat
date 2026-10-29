@@ -106,6 +106,8 @@ class Nest(Hub):
     role = "nest"
 
     def __init__(self, cfg: dict, devices: dict | None = None, browse: bool | None = None):
+        from .catalog import configure
+        configure(cfg.get("catalog") or [Path(cfg["state_dir"]) / "profiles"])
         if devices is None:
             devices = {n: build(n, d) for n, d in cfg["devices"].items()}
         state = Path(cfg["state_dir"])
@@ -113,6 +115,8 @@ class Nest(Hub):
                          cfg.get("approvals"), float(cfg.get("approval_minutes", 30)), cfg.get("require_lock"))
         from .users import Users
         self.users = Users(self, state / "users.json")
+        from .bench import Workbench
+        self.bench = Workbench(self, state)                           # first: it brings back devices added while running
         self.limits: dict = cfg.get("limits") or {}
         for dev_id, attrs in self.limits.items():
             if "/" not in dev_id and dev_id not in self.devices:
@@ -262,6 +266,8 @@ class Nest(Hub):
             return ok(self.adopt(m.name, None if m.value is None else str(m.value), m.args.get("url")))
         if m.op == "forget":
             return ok(self.forget(m.name))
+        if m.op in ("scan", "probe", "capture", "profile", "device"):
+            return self._bench(m, who)
         if m.device is None or "/" not in m.device:
             return super().dispatch(m, who)
         rat, local = self._remote(m.device)
@@ -288,6 +294,33 @@ class Nest(Hub):
             raise LabratError(err.get("code", "device"), f"{rat.name}: {err.get('message', 'no reason given')}")
         reply.pop("id", None)
         return reply
+
+    def _bench(self, m: Message, who: Principal) -> dict:
+        """Workbench operations run where the device is plugged in: here, or on the rat in args.rat (or named in a
+        device id such as bench-rat/ups). The nest checks the role and approvals first and the rat trusts it."""
+        rat_name = m.args.get("rat")
+        name = m.name
+        if m.op == "device" and name and "/" in name:
+            rat_name, _, name = name.partition("/")
+        if not rat_name:
+            return super().dispatch(m, who)
+        from .bench import check_role
+        check_role(m, who)
+        if m.op == "profile" and m.args.get("action") == "save":
+            from .catalog import parse
+            if parse(str(m.args.get("toml", ""))).meta["status"] == "tested" and who.role != "admin":
+                raise LabratError("forbidden", "only an admin marks a profile tested; save it as status = \"draft\"")
+        args = {k: v for k, v in m.args.items() if k not in ("rat", "approved")}
+        if m.op == "probe":
+            from .probe import Probe
+            if Probe(str(args.get("target", "")), sends=args.get("sends")).needs_approval() and not m.approved:
+                raise self.ask_approval(m, who)
+            if m.approved:
+                args["approved"] = True
+        if rat_name not in self.rats:
+            raise LabratError("not_found", f"no adopted rat {rat_name!r}")
+        fwd = {"op": m.op, **({"name": name} if name else {}), "args": args}
+        return ok(self.rats[rat_name].ask(fwd, timeout=120))
 
     def entries(self) -> list[dict]:
         out = super().entries()

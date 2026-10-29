@@ -75,6 +75,7 @@ class Transport:
     def __init__(self, address: str, timeout: float = 2.0):
         self.address, self.timeout = address, timeout
         self._io_lock = threading.Lock()
+        self.transcript: list[dict] | None = None       # set to a list to keep every exchange (labrat profile try)
 
     def write(self, line: str) -> None:
         """Not retried: a write that may have arrived is not sent twice."""
@@ -84,10 +85,25 @@ class Transport:
             except (OSError, TimeoutError) as e:
                 self.close()
                 raise LabratError("device", f"{self.address}: {e}") from None
+            if self.transcript is not None:
+                self.transcript.append({"send": line})
 
-    def query(self, line: str) -> str:
+    def query(self, line: str, retry: bool = True) -> str:
+        """Send a line and read the reply. After a broken link it reconnects and asks once more, unless retry is
+        False (probing an unknown device, where silence is an answer)."""
         with self._io_lock:
-            return self._retry(lambda: (self._send(line), self._receive())[1])
+            ask = lambda: (self._send(line), self._receive())[1]                     # noqa: E731
+            if retry:
+                reply = self._retry(ask)
+            else:
+                try:
+                    reply = ask()
+                except (OSError, TimeoutError) as e:
+                    self.close()
+                    raise LabratError("device", f"{self.address}: {e}") from None
+            if self.transcript is not None:
+                self.transcript.append({"send": line, "reply": reply})
+            return reply
 
     def query_block(self, line: str) -> bytes:
         """Send a query and read an IEEE 488.2 definite-length block (#<n><length><data>), as scopes and analysers send."""
@@ -287,7 +303,77 @@ class UsbtmcTransport(Transport):
                 self.fd = None
 
 
-TRANSPORTS = {"tcp": TcpTransport, "serial": SerialTransport, "usbtmc": UsbtmcTransport}
+class HidTransport(Transport):
+    """A USB HID bridge that carries text in fixed-size reports, as the Cypress bridge (0665:5161) in many UPSs
+    does: each command goes out in reports of eight bytes, and the reply comes back the same way."""
+
+    def __init__(self, address: str, timeout: float = 2.0, eol: bytes = b"\r", read_eol: bytes | None = None, report: int = 8):
+        super().__init__(address, timeout)
+        self.path = urlparse(address).path
+        self.eol, self.read_eol, self.report = eol, read_eol or eol[-1:], report
+        self.fd: int | None = None
+
+    def _conn(self) -> int:
+        if self.fd is None:
+            self.fd = os.open(self.path, os.O_RDWR)
+        return self.fd
+
+    def _send(self, line: str) -> None:
+        import select
+        fd, data = self._conn(), line.encode() + self.eol
+        while select.select([fd], [], [], 0)[0]:               # whatever an earlier reply left behind
+            os.read(fd, 64)
+        for i in range(0, len(data), self.report):
+            os.write(fd, b"\x00" + data[i:i + self.report].ljust(self.report, b"\x00"))
+
+    def _receive(self) -> str:
+        import select
+        import time
+        fd, out, end = self._conn(), b"", time.monotonic() + self.timeout
+        while self.read_eol not in out:
+            left = end - time.monotonic()
+            if left <= 0 or not select.select([fd], [], [], left)[0]:
+                raise TimeoutError("no reply within the timeout")
+            out += os.read(fd, 64)
+        return out.split(self.read_eol, 1)[0].replace(b"\x00", b"").decode(errors="replace").strip()
+
+    def close(self) -> None:
+        if self.fd is not None:
+            try:
+                os.close(self.fd)
+            finally:
+                self.fd = None
+
+
+class ReplayTransport(Transport):
+    """Answers from a profile's recordings: replay://<manufacturer>/<model>. A query nobody recorded times out, as a
+    real instrument would, and writes are accepted and kept in .writes."""
+
+    def __init__(self, address: str, timeout: float = 2.0, recordings: list[dict] | None = None):
+        super().__init__(address, timeout)
+        if recordings is None:
+            from ..catalog import default
+            recordings = default().get(address.split("://", 1)[1]).recordings
+        self.replies = {r["send"]: r["reply"] for r in recordings if "send" in r}
+        self.writes: list[str] = []
+        self._last: str | None = None
+
+    def _send(self, line: str) -> None:
+        self._last = line
+        self.writes.append(line)
+
+    def _receive(self) -> str:
+        self.writes.pop()                                      # it was a query
+        if self._last not in self.replies:
+            raise TimeoutError(f"no recorded reply to {self._last!r}")
+        return self.replies[self._last]
+
+    def _read_exact(self, n: int) -> bytes:
+        raise TimeoutError("recordings hold no binary blocks")
+
+
+TRANSPORTS = {"tcp": TcpTransport, "serial": SerialTransport, "usbtmc": UsbtmcTransport, "hid": HidTransport,
+              "replay": ReplayTransport}
 
 
 def transport(address: str, timeout: float = 2.0) -> Transport:

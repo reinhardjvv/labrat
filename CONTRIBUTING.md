@@ -57,6 +57,12 @@ the tests yourself, and make sure no private data from your own lab ends up in t
 A maintainer reviews every pull request. Pull requests from branches of this repository also get an automated
 review, which is advice: a maintainer decides. Expect questions about safety, tests and naming.
 
+## Device profiles
+
+A profile for a model LABRAT does not know is one of the most useful contributions. See
+[docs/catalog.md](docs/catalog.md#sharing-a-profile): include recordings from a real unit and say where they
+came from.
+
 ## Licence
 
 By contributing, you agree that your contribution is licensed under the [Apache License 2.0](LICENSE), the

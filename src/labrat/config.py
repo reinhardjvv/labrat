@@ -12,7 +12,8 @@ from .message import ROLES, LabratError
 NEST_PORT = 8780
 RAT_PORT = 8781
 
-COMMON = {"name", "host", "port", "state_dir", "discovery", "lock_minutes", "devices", "tokens", "approvals", "approval_minutes", "stores", "recordings"}
+COMMON = {"name", "host", "port", "state_dir", "discovery", "lock_minutes", "devices", "tokens", "approvals", "approval_minutes", "stores", "recordings",
+          "catalog"}
 NEST_KEYS = COMMON | {"limits", "heartbeat_s", "experiments", "require_lock"}
 RAT_KEYS = COMMON | {"watchdog_s", "allow_god_mode"}
 
@@ -61,6 +62,8 @@ def load(kind: str, path: Path) -> dict:
     cfg.setdefault("lock_minutes", 10.0)
     cfg.setdefault("devices", {})
     cfg["state_dir"] = Path(cfg.get("state_dir") or default_state_dir()).expanduser()
+    cat = cfg.get("catalog", [str(cfg["state_dir"] / "profiles")])
+    cfg["catalog"] = [Path(str(c)).expanduser() for c in ([cat] if isinstance(cat, str) else cat)]
     if kind == "nest":
         cfg.setdefault("heartbeat_s", 5.0)
         cfg.setdefault("limits", {})

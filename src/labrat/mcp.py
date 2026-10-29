@@ -31,7 +31,11 @@ INSTRUCTIONS = """LABRAT connects you to real laboratory equipment. Rules:
    Never try to get the same effect another way.
 7. If the lab keeps experiments, start one (labrat_experiment) before a piece of work and stop it when you are
    done. Your commands, the instrument settings and any recordings then land together in the person's folder.
-   Write what you are doing and why as notes. Read results back with labrat_files."""
+   Write what you are doing and why as notes. Read results back with labrat_files.
+8. To make an unknown device usable: labrat_scan, then labrat_probe (or labrat_capture of its vendor software),
+   then write a draft profile, labrat_try_profile it until every attribute reads, and labrat_save_profile it with
+   the transcripts. Explain the evidence for each attribute. Never guess at commands that could change or damage
+   the device; ask the person. A person adds the device with labrat add."""
 
 _dev = {"type": "string", "description": "Device id from labrat_devices, e.g. 'psu' or 'bench-rat/psu'."}
 _ch = {"type": "string", "description": "Channel, for attributes and functions that have channels."}
@@ -69,6 +73,32 @@ TOOLS = [
     ("labrat_files", "The person's experiment files. With no path, their experiment folders; with a folder, its files; "
      "with a file, its text (length bytes from offset, 256 KB by default; 'more' says if there is more).",
      {"path": {"type": "string"}, "offset": {"type": "integer"}, "length": {"type": "integer"}}, [], "files"),
+    ("labrat_scan", "What is plugged into the nest or a rat (USB devices, serial ports, I2C buses), with the catalog "
+     "profiles that fit each. probe = true confirms a fit with the profile's own read-only query.",
+     {"rat": {"type": "string"}, "probe": {"type": "boolean"}}, [], "scan"),
+    ("labrat_probe", "Ask an unknown device safe questions and get every answer back. target is a serial port, hid:///dev/hidrawN, "
+     "tcp://host:port, http://host or i2c:<bus>. With no settings it tries the usual baud rates and protocols. sends adds "
+     "queries of your own: those ending in '?' go at once, anything else waits for a person, and words that reset or shut "
+     "down a device are never sent. The transcript's file name can be given to labrat_save_profile.",
+     {"target": {"type": "string"}, "rat": {"type": "string"}, "protocol": {"type": "string", "enum": ["auto", "scpi", "megatec", "text"]},
+      "sends": {"type": "array", "items": {"type": "string"}}, "baud": {"type": "integer"},
+      "line_ending": {"type": "string", "enum": ["lf", "cr", "crlf"]}}, ["target"], "probe"),
+    ("labrat_capture", "Record what a vendor's software says to a device: start (kind serial with target the port, or usb with "
+     "target vendor:product), status, or stop, which returns the transcript's file name. For serial, the person points "
+     "the vendor software at the connect_to path.", {"action": {"type": "string", "enum": ["start", "status", "stop"]},
+                                                     "kind": {"type": "string", "enum": ["serial", "usb"]}, "target": {"type": "string"},
+                                                     "baud": {"type": "integer"}, "rat": {"type": "string"}}, ["action"], "capture"),
+    ("labrat_profiles", "The device profile catalog. With id, that profile in full as TOML; otherwise the list, filtered by select.",
+     {"id": {"type": "string"}, "select": {"type": "string"}, "rat": {"type": "string"}}, [], "profile"),
+    ("labrat_try_profile", "Try a profile on the real device and read every attribute it describes, changing nothing. profile "
+     "is a catalog id or a whole draft profile as TOML (labrat_profiles with id mecer/me-2000-wpru shows a complete one); "
+     "device holds port or address "
+     "and any overrides.", {"profile": {"type": "string"}, "device": {"type": "object"}, "rat": {"type": "string"}},
+     ["profile", "device"], "profile"),
+    ("labrat_save_profile", "Save a draft profile (TOML, status = \"draft\") to the catalog, with the replies of the named "
+     "probe and capture transcripts added as its recordings. A person then adds the device with labrat add.",
+     {"toml": {"type": "string"}, "transcripts": {"type": "array", "items": {"type": "string"}}, "rat": {"type": "string"}},
+     ["toml"], "profile"),
     ("labrat_approval", "The state of a request that waits for a person: pending, approved (with its result), denied, failed or expired.",
      {"id": {"type": "string", "description": "the approval id from a 'pending' reply"}}, ["id"], "approval"),
 ]
@@ -100,6 +130,20 @@ def call_tool(client: Client, name: str, args: dict):
     if op == "files":
         msg = {"op": op, **({"name": args["path"]} if args.get("path") else {}),
                "args": {k: args[k] for k in ("offset", "length") if args.get(k) is not None}}
+    if name == "labrat_scan":
+        msg = {"op": "scan", "args": {k: args[k] for k in ("rat", "probe") if args.get(k) is not None}}
+    if name in ("labrat_probe", "labrat_capture"):
+        msg = {"op": op, "args": {k: v for k, v in args.items() if v is not None}}
+    if name == "labrat_profiles":
+        msg = {"op": "profile", **({"name": args["id"]} if args.get("id") else {}),
+               "args": {"action": "show" if args.get("id") else "list", **{k: args[k] for k in ("select", "rat") if args.get(k)}}}
+    if name == "labrat_try_profile":
+        p = str(args.get("profile", ""))
+        msg = {"op": "profile", **({} if "\n" in p else {"name": p}),
+               "args": {"action": "try", "device": args.get("device") or {}, **({"toml": p} if "\n" in p else {}),
+                        **({"rat": args["rat"]} if args.get("rat") else {})}}
+    if name == "labrat_save_profile":
+        msg = {"op": "profile", "args": {"action": "save", **{k: args[k] for k in ("toml", "transcripts", "rat") if args.get(k)}}}
     extra = dict(args.get("args") or {})
     if op == "list":
         extra.update({k: args[k] for k in ("select", "sort") if args.get(k)})
