@@ -1,0 +1,30 @@
+name: Device support
+description: Ask for a driver or an instrument description, or offer one
+labels: [device]
+body:
+  - type: input
+    id: device
+    attributes:
+      label: Equipment
+      placeholder: maker, model and firmware
+    validations:
+      required: true
+  - type: dropdown
+    id: link
+    attributes:
+      label: How it connects
+      options: [Ethernet (SCPI or raw socket), USB (USBTMC), USB serial or RS-232, GigE Vision, USB3 Vision, HDMI, GPIO, Modbus, Vendor SDK only, Other]
+    validations:
+      required: true
+  - type: textarea
+    id: docs
+    attributes:
+      label: Documentation
+      description: Links to the programming manual and the datasheet with its absolute maximum ratings.
+  - type: checkboxes
+    id: help
+    attributes:
+      label: Help
+      options:
+        - label: I can test a driver on this equipment.
+        - label: I would like to write the driver myself.

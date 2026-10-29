@@ -1,0 +1,25 @@
+# An example nest. Copy to /etc/labrat/nest.toml and replace the token hashes with your own (labrat token).
+name = "lab-nest"
+port = 8780
+
+[[tokens]]
+name = "ada"
+role = "admin"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[tokens]]
+name = "analysis-scripts"
+role = "operator"
+sha256 = "1111111111111111111111111111111111111111111111111111111111111111"
+
+[[tokens]]
+name = "claude"
+role = "operator"
+sha256 = "2222222222222222222222222222222222222222222222222222222222222222"
+
+# The nest's own limits for devices on rats, checked before a change leaves the nest.
+[limits."bench-rat/psu".VoltageLevel]
+max = 5
+
+[limits."optics-rat/cam".ExposureTime]
+max = 0.02
