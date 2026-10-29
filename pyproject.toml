@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "labrat-lab"
+dynamic = ["version"]
+description = "One small, safe message interface to lab equipment: a nest server, rats at the bench, an HTTP API and an MCP server"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Reinhard Jansen van Vuuren" }]
+requires-python = ">=3.11"
+dependencies = ["zeroconf>=0.131"]
+keywords = ["laboratory automation", "instrument control", "SCPI", "GPIO", "MCP", "Raspberry Pi", "test and measurement"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Education",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+    "Topic :: System :: Hardware",
+    "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://github.com/reinhardjvv/labrat"
+Documentation = "https://github.com/reinhardjvv/labrat/tree/main/docs"
+Issues = "https://github.com/reinhardjvv/labrat/issues"
+Changelog = "https://github.com/reinhardjvv/labrat/blob/main/CHANGELOG.md"
+
+[project.optional-dependencies]
+serial = ["pyserial>=3.5"]
+gpio = ["gpiod>=2.1"]
+rat = ["labrat-lab[serial,gpio]"]
+dev = ["pytest>=8", "ruff>=0.6", "build>=1", "pyserial>=3.5", "pre-commit>=3"]
+
+[project.scripts]
+labrat = "labrat.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "labrat.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+labrat = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 130
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "UP", "I"]
+ignore = ["E501"]

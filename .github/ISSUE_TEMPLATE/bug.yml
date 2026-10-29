@@ -1,0 +1,35 @@
+name: Bug report
+description: Something does not work as documented
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you ran, what you expected and what happened instead. Paste errors as text.
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: Configuration
+      description: The relevant part of nest.toml or rat.toml. Remove tokens, keys, addresses and passwords.
+      render: toml
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `labrat --version`
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: Computer and operating system
+      placeholder: Raspberry Pi 5, Raspberry Pi OS Lite 64-bit
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety
+      options:
+        - label: This bug let a value past a limit, kept a device out of its safe state, or bypassed a lock or role. (Then report it privately instead, see SECURITY.md.)

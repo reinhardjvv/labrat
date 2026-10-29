@@ -1,0 +1,12 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+  - repo: local
+    hooks:
+      - id: check-repo
+        name: private data and wording
+        entry: python tools/check_repo.py
+        language: system
+        pass_filenames: false

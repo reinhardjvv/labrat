@@ -1,0 +1,52 @@
+# An example rat at an optics table. Copy to /etc/labrat/rat.toml and keep the devices you have.
+name = "optics-rat"
+watchdog_s = 20
+
+# A bench supply on the rat's network, described in a few lines.
+[devices.psu]
+driver = "scpi"
+address = "tcp://192.0.2.10:5025"
+safe_commands = ["OUTP OFF"]
+
+[devices.psu.attributes.VoltageLevel]
+type = "float"
+unit = "V"
+min = 0
+max = 12
+get = "VOLT?"
+set = "VOLT {value}"
+
+[devices.psu.attributes.OutputEnabled]
+type = "bool"
+get = "OUTP?"
+set = "OUTP {value}"
+on = "ON"
+off = "OFF"
+
+[devices.psu.functions.Identify]
+query = "*IDN?"
+
+# A shutter and an interlock input on the Raspberry Pi's GPIO header.
+[devices.shutter]
+driver = "gpio"
+chip = "/dev/gpiochip0"
+outputs = { shutter = 17 }
+inputs = { door_closed = 22 }
+safe = { shutter = false }
+
+# An HDMI spatial light modulator on the first HDMI output.
+[devices.slm]
+driver = "display"
+framebuffer = "/dev/fb0"
+
+# A GigE Vision camera, with exposure held below 20 ms.
+[devices.cam]
+driver = "genicam"
+pixel_format = "Mono8"
+[devices.cam.limits.ExposureTime]
+max = 0.02
+
+# A PoE network camera watching the table.
+[devices.room]
+driver = "camera"
+source = "rtsp://viewer:password@192.0.2.30:554/stream1"

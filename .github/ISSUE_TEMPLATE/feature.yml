@@ -1,0 +1,16 @@
+name: Feature request
+description: An idea for LABRAT
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to do in the lab, and what stops you today.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: The idea
+      description: How LABRAT could help, if you have a view.
