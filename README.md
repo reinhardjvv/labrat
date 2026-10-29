@@ -15,6 +15,9 @@
 
 <p align="center">
   <a href="https://github.com/reinhardjvv/labrat/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/reinhardjvv/labrat/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://pypi.org/project/labrat-lab/"><img alt="PyPI" src="https://img.shields.io/pypi/v/labrat-lab"></a>
+  <a href="https://pypi.org/project/labrat-lab/"><img alt="Python" src="https://img.shields.io/pypi/pyversions/labrat-lab"></a>
+  <a href="docs/mcp.md"><img alt="MCP" src="https://img.shields.io/badge/MCP-built_in-6f42c1"></a>
   <a href="LICENSE"><img alt="Licence" src="https://img.shields.io/badge/licence-Apache--2.0-blue"></a>
 </p>
 
