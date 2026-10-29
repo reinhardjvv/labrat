@@ -1,0 +1,63 @@
+[profile]
+manufacturer = "tektronix"
+model = "AFG3252"
+kind = "function-generator"
+description = "Two-channel 240 MHz arbitrary function generator"
+evidence = "commands used with a unit (firmware 3.2.4) over VXI-11 and raw sockets in a 2026 laboratory experiment; no replies recorded yet"
+status = "tested"
+
+[[match]]
+idn = "TEKTRONIX,AFG3252,*"
+
+[device]
+driver = "scpi"
+kind = "function-generator"
+safe_commands = ["OUTPut1:STATe OFF", "OUTPut2:STATe OFF"]
+
+[device.attributes.OutputEnabled]
+type = "bool"
+channels = ["1", "2"]
+get = "OUTPut{channel}:STATe?"
+set = "OUTPut{channel}:STATe {value}"
+on = "ON"
+off = "OFF"
+
+[device.attributes.Frequency]
+channels = ["1", "2"]
+unit = "Hz"
+min = 0
+max = 240e6
+get = "SOURce{channel}:FREQuency:FIXed?"
+set = "SOURce{channel}:FREQuency:FIXed {value}"
+
+[device.attributes.Amplitude]
+channels = ["1", "2"]
+unit = "Vpp"
+min = 0
+max = 10
+get = "SOURce{channel}:VOLTage:LEVel:IMMediate:AMPLitude?"
+set = "SOURce{channel}:VOLTage:LEVel:IMMediate:AMPLitude {value}VPP"
+doc = "into a 50 ohm load"
+
+[device.attributes.Offset]
+channels = ["1", "2"]
+unit = "V"
+min = -5
+max = 5
+get = "SOURce{channel}:VOLTage:LEVel:IMMediate:OFFSet?"
+set = "SOURce{channel}:VOLTage:LEVel:IMMediate:OFFSet {value}"
+
+[device.attributes.Shape]
+type = "str"
+channels = ["1", "2"]
+choices = ["SIN", "SQU", "PULS", "RAMP", "PRN", "DC", "SINC", "GAUS", "LOR", "ERIS", "EDEC", "HAV", "USER1", "USER2", "USER3", "USER4", "EMEM"]
+get = "SOURce{channel}:FUNCtion:SHAPe?"
+set = "SOURce{channel}:FUNCtion:SHAPe {value}"
+
+[device.attributes.Phase]
+channels = ["1", "2"]
+unit = "deg"
+min = -180
+max = 180
+get = "SOURce{channel}:PHASe:ADJust?"
+set = "SOURce{channel}:PHASe:ADJust {value}DEG"

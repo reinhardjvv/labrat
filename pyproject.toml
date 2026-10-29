@@ -52,7 +52,7 @@ version = { attr = "labrat.__version__" }
 where = ["src"]
 
 [tool.setuptools.package-data]
-labrat = ["py.typed"]
+labrat = ["py.typed", "profiles/*/*.toml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

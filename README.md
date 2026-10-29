@@ -113,7 +113,8 @@ flowchart TB
 | Pumps, stages, controllers and Arduino boards with their own commands | serial, or a serial server on the network |
 | Smart lights and plugs, ESP32 boards and anything on a broker or a web API | MQTT or HTTP |
 | Uninterruptible power supplies | Network UPS Tools |
-| Anything else with a programming interface | a driver of a few dozen lines of Python |
+| Modbus meters and controllers, and devices with their own binary frames | serial or TCP |
+| Anything else with a programming interface | a profile worked out with `labrat probe`, or a driver of a few dozen lines of Python |
 
 A bench instrument needs no code. Its commands go in a few lines of configuration
 ([drivers](docs/drivers.md)), and simulated devices let you try everything without hardware.
@@ -149,6 +150,11 @@ talk to it over HTTP.
 **Do I need a Raspberry Pi?** No. A small lab runs the nest alone on one computer, with its instruments on the
 network or plugged in. Rats are for equipment that is spread over benches or needs local USB, GPIO or I2C.
 
+**What about a device nobody supports?** Plug it in and run `labrat probe`, or ask your agent to work it
+out. LABRAT asks it safe questions, records what its vendor software says to it, and turns that into a
+profile, a short file that makes it a normal device. The next lab with the same model gets it from the
+catalog ([catalog](docs/catalog.md)).
+
 **Is it safe to let an agent drive real equipment?** The guardrails are yours to set: limits on every
 setting, locks, requests that wait for a person, and one stop that puts the whole lab in its safe state. A
 rat that loses the nest does the same by itself.
@@ -176,6 +182,7 @@ experiment ([experiments](docs/experiments.md)).
 | [MCP](docs/mcp.md) | AI agents through the Model Context Protocol |
 | [Drivers](docs/drivers.md) | the built-in drivers and how to write one |
 | [Recordings](docs/recordings.md) | readings, waveforms and streams written to storage on a schedule |
+| [Catalog and reverse engineering](docs/catalog.md) | device profiles, scanning, probing and capturing unknown devices |
 | [Experiments](docs/experiments.md) | each person's work in their own folder, with its commands, settings, notes and recordings |
 | [Names and selectors](docs/naming.md) | ids, identities, the standard kinds, and finding devices by type, maker or serial |
 | [Safety and security](docs/safety.md) | limits, safe states, the watchdog, tokens and the network |

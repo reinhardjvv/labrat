@@ -41,6 +41,11 @@ OPS: dict[str, str] = {
     "files": "viewer",         # read your own experiments' files; admins read everyone's
     "who": "viewer",           # who holds each device, who changed it last, who was active when
     "users": "viewer",         # the users; adding and removing needs an admin
+    "scan": "viewer",          # the workbench (bench.py): each checks the role its action needs
+    "probe": "operator",
+    "capture": "operator",
+    "profile": "viewer",
+    "device": "operator",
 }
 ROLES = ("viewer", "operator", "admin")
 
@@ -88,6 +93,7 @@ class Message:
     value: Any = None
     args: dict = field(default_factory=dict)
     id: Any = None
+    approved: bool = False                 # set by the server once a person has approved it, never from JSON
 
     def to_dict(self) -> dict:
         d = {"op": self.op}

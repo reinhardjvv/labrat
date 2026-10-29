@@ -288,6 +288,8 @@ class Device:
              "functions": {n: f.describe() for n, f in self.functions.items()}}
         if self.streams:
             d["streams"] = {n: st.describe() for n, st in self.streams.items()}
+        if getattr(self, "profile", None):
+            d["profile"] = self.profile
         if self.description:
             d["description"] = self.description
         if self.safe:

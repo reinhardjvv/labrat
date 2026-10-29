@@ -6,6 +6,20 @@ All notable changes to LABRAT are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-30
+
+### Added
+
+- Device catalog: profiles that recognise a model by USB ID, `*IDN?` or a probe, describe it for an existing
+  driver, and keep the real replies it was worked out from. `profile = "..."` uses one, and `simulate = true`
+  answers from its recordings. Profiles for the Mecer ME-2000-WPRU UPS and the Tektronix AFG3252 and MSO54.
+- `labrat scan`, `labrat probe` (read-only by default, with a deny list and approval for anything else) and
+  `labrat capture` (serial pass-through and usbmon) for unknown devices, and `labrat profile try` and `save`.
+- `labrat add` and `labrat remove`: devices added while the nest or a rat runs, from a profile or a driver.
+- The `frames` driver for Modbus RTU and TCP and fixed binary frames with checksums, and USB HID bridges in the
+  `serial` driver.
+- MCP tools for the workbench, so an agent can work out a device and draft its profile.
+
 ## [0.1.0] - 2026-10-29
 
 First release of LABRAT as a nest, rats and one message API.
@@ -48,5 +62,6 @@ First release of LABRAT as a nest, rats and one message API.
 - An install script and systemd units for nests and rats.
 - Adoption and address changes that send a rat's key only after the rat proves it holds it (HMAC challenge).
 
-[Unreleased]: https://github.com/reinhardjvv/labrat/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/reinhardjvv/labrat/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/reinhardjvv/labrat/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/reinhardjvv/labrat/releases/tag/v0.1.0

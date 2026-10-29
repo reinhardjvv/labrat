@@ -1,0 +1,151 @@
+# Built from replies recorded from a unit on 20 Oct 2026. Every [[recording]] below is verbatim.
+
+[profile]
+manufacturer = "mecer"
+model = "ME-2000-WPRU"
+kind = "ups"
+description = "2000 VA / 1600 W on-line UPS (Voltronic Winner Pro, WPHVR2K0) speaking the Voltronic variant of the Megatec protocol"
+evidence = "replies recorded from a unit with firmware 01833.01 on 20 Oct 2026, over its USB HID bridge"
+status = "tested"
+
+[[match]]
+usb = "0665:5161"            # a Cypress HID bridge that many Megatec UPSs share
+probe = "QMD"                # so the model code confirms it
+reply = 'WPHVR2K0'
+
+[device]
+driver = "serial"
+kind = "ups"
+line_ending = "cr"
+timeout = 2.0
+
+[device.attributes.Mode]
+type = "str"
+get = "QMOD"
+reply = '^\((\w)'
+map = { P = "PowerOn", S = "Standby", Y = "Bypass", L = "Line", B = "Battery", T = "BatteryTest", F = "Fault", E = "Eco", C = "Converter", D = "ShuttingDown" }
+doc = "Line: the load runs from mains through the inverter. Battery: mains has failed. Bypass: the load gets mains directly."
+
+[device.attributes.OnBattery]
+type = "bool"
+get = "QGS"
+reply = '^\((?:\S+ ){11}\d{2}(\d)'
+on = "1"
+off = "0"
+
+[device.attributes.BatteryLow]
+type = "bool"
+get = "QGS"
+reply = '^\((?:\S+ ){11}\d{3}(\d)'
+on = "1"
+off = "0"
+
+[device.attributes.BypassActive]
+type = "bool"
+get = "QGS"
+reply = '^\((?:\S+ ){11}\d{4}(\d)'
+on = "1"
+off = "0"
+
+[device.attributes.Fault]
+type = "bool"
+get = "QGS"
+reply = '^\((?:\S+ ){11}\d{5}(\d)'
+on = "1"
+off = "0"
+
+[device.attributes.BatteryCharge]
+get = "QBV"
+reply = '^\((?:\S+ ){3}(\S+)'
+unit = "%"
+
+[device.attributes.BatteryRuntime]
+get = "QBV"
+reply = '^\((?:\S+ ){4}(\S+)'
+unit = "min"
+doc = "How long the batteries would carry the present load, as the UPS estimates it"
+
+[device.attributes.BatteryVoltage]
+get = "QBV"
+reply = '^\((\S+) '
+unit = "V"
+
+[device.attributes.InputVoltage]
+get = "QGS"
+reply = '^\((\S+) '
+unit = "V"
+
+[device.attributes.InputFrequency]
+get = "QGS"
+reply = '^\((?:\S+ ){1}(\S+)'
+unit = "Hz"
+
+[device.attributes.OutputVoltage]
+get = "QGS"
+reply = '^\((?:\S+ ){2}(\S+)'
+unit = "V"
+
+[device.attributes.OutputFrequency]
+get = "QGS"
+reply = '^\((?:\S+ ){3}(\S+)'
+unit = "Hz"
+
+[device.attributes.OutputCurrent]
+get = "QGS"
+reply = '^\((?:\S+ ){4}(\S+)'
+unit = "A"
+
+[device.attributes.LoadPercent]
+get = "QGS"
+reply = '^\((?:\S+ ){5}(\S+)'
+unit = "%"
+
+[device.attributes.Temperature]
+get = "QGS"
+reply = '^\((?:\S+ ){10}(\S+)'
+unit = "°C"
+
+[device.attributes.Firmware]
+type = "str"
+get = "QVFW"
+reply = 'VERFW:(\S+)'
+
+[device.functions.Status]
+query = "QGS"
+doc = "the raw general status line"
+
+[[recording]]
+send = "QGS"
+reply = "(225.5 50.0 229.8 50.0 000.0 000 375.6 377.7 054.7 ---.- 025.4 100000000001"
+
+[[recording]]
+send = "QBV"
+reply = "(054.6 04 01 094 306"
+
+[[recording]]
+send = "QMOD"
+reply = "(L"
+
+[[recording]]
+send = "QMD"
+reply = "(#######WPHVR2K0 ###2000 80 1/1 230 230 04 12.0"
+
+[[recording]]
+send = "QVFW"
+reply = "(VERFW:01833.01"
+
+[[recording]]
+send = "QWS"
+reply = "(0000000000000000000000000000000000000000000000000000000000000000"
+
+[[recording]]
+send = "QFS"
+reply = "(14 218.6 49.9 052.1 50.0 012 022.1 328.2 325.6 054.6 027.0 01101100"
+
+[[recording]]
+send = "QBYV"
+reply = "(264 170"
+
+[[recording]]
+send = "QFLAG"
+reply = "(EpbrashczDovegfm"

@@ -1,0 +1,64 @@
+[profile]
+manufacturer = "tektronix"
+model = "MSO54"
+kind = "oscilloscope"
+description = "4-channel mixed-signal oscilloscope, 12-bit ADC, 6.25 GS/s"
+evidence = "commands used with a unit (firmware 1.26.5) over a raw socket on port 4000 in a 2026 laboratory experiment; no replies recorded yet"
+status = "tested"
+
+[[match]]
+idn = "TEKTRONIX,MSO54,*"
+
+[device]
+driver = "scpi"
+kind = "oscilloscope"
+timeout = 10.0
+
+[device.attributes.Running]
+type = "bool"
+get = "ACQuire:STATE?"
+set = "ACQuire:STATE {value}"
+on = "RUN"
+off = "STOP"
+
+[device.attributes.HorizontalScale]
+unit = "s/div"
+get = "HORizontal:MODE:SCAle?"
+set = "HORizontal:MODE:SCAle {value}"
+
+[device.attributes.SampleRate]
+unit = "S/s"
+get = "HORizontal:MODE:SAMPLERate?"
+set = "HORizontal:MODE:SAMPLERate {value}"
+doc = "settable with the horizontal mode in MANual"
+
+[device.attributes.RecordLength]
+type = "int"
+get = "HORizontal:RECOrdlength?"
+
+[device.attributes.VerticalScale]
+channels = ["1", "2", "3", "4"]
+unit = "V/div"
+get = "CH{channel}:SCAle?"
+set = "CH{channel}:SCAle {value}"
+
+[device.attributes.VerticalOffset]
+channels = ["1", "2", "3", "4"]
+unit = "V"
+get = "CH{channel}:OFFSet?"
+set = "CH{channel}:OFFSet {value}"
+
+[device.attributes.Termination]
+channels = ["1", "2", "3", "4"]
+unit = "ohm"
+choices = [50.0, 1e6]
+get = "CH{channel}:TERmination?"
+set = "CH{channel}:TERmination {value}"
+
+[device.attributes.ChannelShown]
+type = "bool"
+channels = ["1", "2", "3", "4"]
+get = "DISplay:GLObal:CH{channel}:STATE?"
+set = "DISplay:GLObal:CH{channel}:STATE {value}"
+on = "ON"
+off = "OFF"

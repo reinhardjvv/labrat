@@ -27,6 +27,7 @@ BUILTIN = {
     "mqtt": "labrat.drivers.mqtt:Mqtt",
     "http": "labrat.drivers.http:Http",
     "nut": "labrat.drivers.nut:Nut",
+    "frames": "labrat.drivers.frames:Frames",
 }
 
 
@@ -49,11 +50,21 @@ def load(name: str) -> type[Device]:
     return cls
 
 
-def build(name: str, config: dict) -> Device:
-    """A ready device from its configuration table, with the lab's limits and safe state applied."""
+def build(name: str, config: dict, profile=None) -> Device:
+    """A ready device from its configuration table, with the lab's limits and safe state applied. A profile given
+    here (a draft being tried) is used as it is; otherwise config's profile is looked up in the catalog."""
+    if profile is not None:
+        pass
+    elif config.get("profile"):
+        from ..catalog import default, merge
+        profile = default().get(str(config["profile"]))
+        config = merge(profile, config)
+    elif config.get("simulate"):
+        raise LabratError("bad_request", f"device {name!r}: simulate needs a profile, whose recordings it answers from")
     if "driver" not in config:
-        raise LabratError("bad_request", f"device {name!r} needs a driver")
+        raise LabratError("bad_request", f"device {name!r} needs a driver or a profile")
     dev = load(str(config["driver"]))(name, config)
     dev.driver = str(config["driver"])
+    dev.profile = profile.id if profile else None
     dev.apply_config()
     return dev

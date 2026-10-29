@@ -85,6 +85,7 @@ class Hub:
         self.active_at: dict[str, float] = {}                         # person -> time of their last request
         self.last_change: dict[str, dict] = {}                        # device -> who changed it last, when and how
         self.users = None                                             # set by the nest: people added while it runs
+        self.bench = None                                             # scan, probe, capture, profiles, devices added live
         self._ctx = threading.local()
         if require_lock is True:
             self.require_lock = ["*"]
@@ -116,7 +117,8 @@ class Hub:
             if not who.god and any(r.matches(msg, who) for r in self.rules):
                 return fail(self.ask_approval(msg, who), msg_id)
             reply = self.dispatch(msg, who)
-            if msg.op in ("set", "call", "lock", "unlock", "stop", "adopt", "forget", "deny") or (
+            if msg.op in ("set", "call", "lock", "unlock", "stop", "adopt", "forget", "deny", "probe") or (
+                    msg.op in ("device", "capture", "profile") and msg.args.get("action") in ("add", "remove", "start", "stop", "save")) or (
                     msg.op == "users" and msg.args.get("action") in ("add", "remove")) or (
                     msg.op in ("record", "experiment") and msg.args.get("action") in ("start", "stop", "note")):
                 self.audit(who, msg, True)
@@ -150,6 +152,10 @@ class Hub:
             return ok(self.health())
         if m.op == "who":
             return ok(self.who())
+        if m.op in ("scan", "probe", "capture", "profile", "device"):
+            if self.bench is None:
+                raise LabratError("not_found", f"this {self.role} has no workbench")
+            return ok(self.bench.op(m, who))
         if m.op == "users":
             if self.users is None:
                 raise LabratError("not_found", f"users are added at the nest; this is a {self.role}")
@@ -218,6 +224,7 @@ class Hub:
         for n, d in self.devices.items():
             holder = self.holder(n)
             out.append({"device": n, **d.identity(), "driver": d.driver, "description": d.description,
+                        **({"profile": d.profile} if getattr(d, "profile", None) else {}),
                         **({"locked_by": holder} if holder else {})})
         return out
 
@@ -373,6 +380,7 @@ class Hub:
             p.update(state="denied", decided_by=who.name)
             return self._public(p)
         p.update(state="approved", decided_by=who.name)
+        p["_msg"].approved = True
         try:
             reply = self.dispatch(p["_msg"], p["_who"])           # the requester's own rights, limits and locks apply
             p["result"] = {k: v for k, v in reply.items() if k != "ok"}
@@ -411,6 +419,8 @@ class Hub:
         return Hub.stop(self, None, "shutdown")
 
     def close(self) -> None:
+        if self.bench is not None:
+            self.bench.close()
         for d in self.devices.values():
             try:
                 d.close()

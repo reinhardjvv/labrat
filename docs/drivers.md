@@ -76,6 +76,11 @@ safe = { heater = false }
 
 Outputs start inactive. Each line is a boolean attribute named as in the configuration.
 
+## Profiles
+
+Any device can take its settings from a [profile](catalog.md) in the catalog, with only the port added:
+`profile = "mecer/me-2000-wpru"` and `port = "hid:///dev/hidraw0"`.
+
 ## serial
 
 Serial devices with their own text commands: pumps, stages, controllers, Arduino boards. Attributes,
@@ -110,6 +115,50 @@ set = "{value}"
 ```
 
 The device is not asked `*IDN?` unless `identify = true`. `reply` works in the `scpi` driver too.
+
+Over a USB HID bridge, as many UPSs use, give `port = "hid:///dev/hidraw0"`. With a profile and
+`simulate = true` the device answers from the profile's recordings ([catalog](catalog.md)).
+
+## frames
+
+Binary protocols: Modbus RTU and TCP, and fixed frames with a checksum, as many meters, loads and controllers
+use. Needs `labrat-lab[serial]` for serial ports.
+
+```toml
+[devices.meter]
+driver = "frames"
+protocol = "modbus-rtu"                # or modbus-tcp, with address = "tcp://192.0.2.60:502"
+port = "/dev/ttyUSB0"
+baud = 9600
+unit = 1
+
+[devices.meter.attributes.Voltage]
+register = 0                           # a holding register; input = true for an input register
+type = "u16"                           # u16, i16, u32, i32 or f32
+scale = 0.1
+unit = "V"
+
+[devices.meter.attributes.Relay]
+coil = 5
+access = "rw"
+
+[devices.load]
+driver = "frames"
+port = "/dev/ttyUSB1"
+checksum = "sum8"                      # none, sum8, xor8, crc16-modbus or crc16-ccitt
+
+[devices.load.attributes.Current]
+send = "AA 01 01 {checksum}"           # hex, with {checksum} and {value:<type>} fields
+reply_length = 6
+check_reply = true
+field = { offset = 3, type = "u16be" }
+scale = 0.001
+unit = "A"
+set = "AA 02 01 {value:u16be} {checksum}"
+```
+
+Modbus replies are checked by their CRC and exceptions come back as errors. Values that do not fit their
+register or field are refused.
 
 ## i2c
 
