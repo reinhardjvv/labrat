@@ -19,7 +19,7 @@ jobs:
       - name: The tag matches the version
         run: test "v$(python -c 'import labrat; print(labrat.__version__)')" = "${GITHUB_REF_NAME}"
       - run: pip install build && python -m build
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
