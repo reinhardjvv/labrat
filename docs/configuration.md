@@ -17,6 +17,7 @@ file. Unknown settings are an error, so a typing mistake stops the server with a
 | `[[approvals]]`, `approval_minutes` | none, `30` | requests that wait for a person, below |
 | `[[tokens]]` | none | who may connect, below |
 | `[devices.<name>]` | none | the devices served, below |
+| `[network]` | none | a private network for the instruments and rats ([network](network.md)) |
 
 ## Nest settings
 

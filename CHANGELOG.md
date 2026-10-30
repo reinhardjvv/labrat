@@ -6,6 +6,12 @@ All notable changes to LABRAT are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `labrat network`: a private network of the nest's or a rat's own, on a spare Ethernet port or a Wi-Fi access
+  point, with fixed addresses by MAC address and, by default, no route beyond the computer. NetworkManager runs
+  it, and `plan` shows every change before `up` applies it.
+
 ## [0.2.0] - 2026-10-30
 
 ### Added

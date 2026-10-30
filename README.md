@@ -187,6 +187,7 @@ experiment ([experiments](docs/experiments.md)).
 | [Recordings](docs/recordings.md) | readings, waveforms and streams written to storage on a schedule |
 | [Catalog and reverse engineering](docs/catalog.md) | device profiles, scanning, probing and capturing unknown devices |
 | [Experiments](docs/experiments.md) | each person's work in their own folder, with its commands, settings, notes and recordings |
+| [A network of its own](docs/network.md) | a private Ethernet or Wi-Fi network for the instruments and rats, with fixed addresses |
 | [Names and selectors](docs/naming.md) | ids, identities, the standard kinds, and finding devices by type, maker or serial |
 | [Safety and security](docs/safety.md) | limits, safe states, the watchdog, tokens and the network |
 | [Roadmap](docs/roadmap.md) | what comes next |

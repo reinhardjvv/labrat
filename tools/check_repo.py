@@ -19,7 +19,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SKIP_FILES = {"LICENSE", "tools/check_repo.py"}
 SKIP_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg", ".pdf", ".whl", ".gz"}
-ALLOWED_NETS = [ipaddress.ip_network(n) for n in ("192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24", "127.0.0.0/8", "0.0.0.0/32")]
+# documentation ranges, loopback, and NetworkManager's default for a shared network (labrat network)
+ALLOWED_NETS = [ipaddress.ip_network(n) for n in ("192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24", "127.0.0.0/8", "0.0.0.0/32",
+                                                  "10.42.0.0/24")]
 
 
 def private_words() -> list[str]:
