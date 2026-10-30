@@ -13,7 +13,7 @@ NEST_PORT = 8780
 RAT_PORT = 8781
 
 COMMON = {"name", "host", "port", "state_dir", "discovery", "lock_minutes", "devices", "tokens", "approvals", "approval_minutes", "stores", "recordings",
-          "catalog"}
+          "catalog", "network"}
 NEST_KEYS = COMMON | {"limits", "heartbeat_s", "experiments", "require_lock"}
 RAT_KEYS = COMMON | {"watchdog_s", "allow_god_mode"}
 
@@ -74,6 +74,9 @@ def load(kind: str, path: Path) -> dict:
     for name in cfg["devices"]:
         check_name(name, "device")
     check_name(cfg["name"], kind)
+    if "network" in cfg:
+        from .network import Network
+        Network(cfg)                                          # its mistakes show at start, not only at 'network up'
     return cfg
 
 

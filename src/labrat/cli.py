@@ -655,6 +655,81 @@ def cmd_service(a):
     print(UNIT.format(kind=a.kind, exe=exe, groups=groups).replace("SupplementaryGroups=\n", ""), end="")
 
 
+def _network_config(given: str | None) -> dict:
+    """The nest's configuration, or the rat's, whichever this computer has."""
+    if given:
+        path = conf.find("nest", given)
+        text = path.read_text(encoding="utf-8")
+        kind = "rat" if any(k in text for k in ("watchdog_s", "allow_god_mode")) else "nest"
+        return conf.load(kind, path)
+    for kind in ("nest", "rat"):
+        if any(p.is_file() for p in conf.default_paths(kind)):
+            return conf.load(kind, conf.find(kind, None))
+    raise LabratError("bad_request", "no nest or rat configuration here; pass --config")
+
+
+def cmd_network(a):
+    import ipaddress
+    import subprocess
+
+    from .network import Host, Network, status
+    from .term import Style, colour_wanted
+    cfg = _network_config(a.config)
+    if "network" not in cfg:
+        raise LabratError("not_found", "this configuration has no [network] table (docs/network.md)")
+    net, host, st = Network(cfg), Host(), Style(colour_wanted(sys.stdout))
+    if a.action == "status":
+        s = status(net, host)
+        if a.json:
+            print(json.dumps(s, indent=2))
+            return 0
+        state = st.good("running") if s["running"] else st.dim("not running (labrat network up starts it)")
+        print(f"{s['connection']}  {state}\n  {s['kind']} on {s['interface']}, {s['address']} in {s['network']}, "
+              f"{'with' if s['internet'] else 'no'} internet for its devices")
+        if net.wifi:
+            psk = net.password() if a.show_password else ("********" if net.password() else "made by labrat network up")
+            print(f"  ssid {net.ssid}, password {psk}")
+        if s.get("url"):
+            print(f"  this {('nest' if 'heartbeat_s' in cfg else 'rat')} on it: {s['url']}")
+        for c in s["clients"]:
+            seen = "" if c.get("present", True) else st.dim("  (gone)")
+            print(f"  {c['address']:<15} {c['mac']}  {c['name']}{seen}")
+        for name, r in sorted(s["reserved"].items(), key=lambda x: ipaddress.ip_address(x[1]["address"])):
+            if r["mac"] not in {c["mac"] for c in s["clients"]}:
+                print(f"  {r['address']:<15} {r['mac']}  {name}  {st.dim('(reserved, not seen)')}")
+        return 0
+    if a.action == "down":
+        script = net.down_script()
+    else:
+        problems, notes = net.check(host)
+        for n in notes:
+            print(f"{st.warn('note')} {n}")
+        for p_ in problems:
+            print(f"{st.bad('problem')} {p_}")
+        psk = net.password(create=a.action == "up") if net.wifi else ""
+        script = net.script(psk or "<made at up>")
+        if a.action == "plan":
+            print(("\n" if problems or notes else "") + "up runs this as root:\n")
+            print(script.replace(f"psk={psk}", "psk=********") if psk else script, end="")
+            return 1 if problems else 0
+        if problems and not a.force:
+            raise LabratError("bad_request", "not starting the network; fix the problems above, or pass --force")
+    if not a.yes:
+        print(f"{'Removing' if a.action == 'down' else 'Starting'} {net.name} on {net.interface}. "
+              f"labrat network plan shows each change.")
+        if input("Go ahead? [y/N] ").strip().lower() not in ("y", "yes"):
+            return 1
+    cmd = ["sh", "-s"] if os.geteuid() == 0 else ["sudo", "sh", "-s"]
+    r = subprocess.run(cmd, input=script, text=True)
+    if r.returncode:
+        raise LabratError("internal", f"the {a.action} script stopped with exit code {r.returncode}")
+    if a.action == "up":
+        print(f"{net.name} is up: {net.address.ip} on {net.interface}" + (f", ssid {net.ssid}" if net.wifi else ""))
+    else:
+        print(f"{net.name} removed")
+    return 0
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="labrat", description="A universal interface for lab automation.")
     p.add_argument("--version", action="version", version=f"labrat {__version__}")
@@ -686,6 +761,14 @@ def main(argv=None) -> int:
     s.set_defaults(fn=cmd_service)
     s = sub.add_parser("drivers", help="the device drivers this installation has")
     s.set_defaults(fn=lambda a: [print(f"{k:<14} {v}") for k, v in sorted(__import__("labrat.drivers", fromlist=["available"]).available().items())])
+    s = sub.add_parser("network", help="a private network of this computer's own, for its rats and instruments")
+    s.add_argument("action", nargs="?", choices=["status", "plan", "up", "down"], default="status")
+    s.add_argument("--config")
+    s.add_argument("--show-password", action="store_true", help="print the Wi-Fi password, to set up a device")
+    s.add_argument("--yes", "-y", action="store_true", help="do not ask before changing the network")
+    s.add_argument("--force", action="store_true", help="start it despite the problems plan finds")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=cmd_network)
     s = sub.add_parser("mcp", help="serve the lab to an AI agent over MCP (stdio)")
     s.set_defaults(fn=lambda a: __import__("labrat.mcp", fromlist=["run"]).run(_client(a)))
 

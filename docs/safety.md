@@ -65,7 +65,8 @@ each key in `<state_dir>/rats.json`, both readable by their owner only. Keys nev
 
 LABRAT speaks plain HTTP. Keep nests and rats on a lab or instrument network, never on the open internet.
 To reach a nest from elsewhere, put it behind a reverse proxy with TLS, such as Caddy or nginx, or reach the
-network over a VPN such as WireGuard or Tailscale.
+network over a VPN such as WireGuard or Tailscale. `labrat network` gives a nest or rat a private network of
+its own for its instruments, which by default reach nothing beyond it ([network](network.md)).
 
 Multicast DNS only finds things. Adopting a rat needs its key, and the nest sends that key only after the rat
 proves it holds it: the nest sends a random challenge and checks the rat's HMAC of it. The nest follows a rat to
