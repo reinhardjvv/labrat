@@ -6,6 +6,21 @@ All notable changes to LABRAT are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Setup describes the computer in full on Linux, ARM boards and macOS: model and architecture, system, processor
+  with its cores, clock and core types, memory and its type, GPUs, each disk with its size, kind and bus, network
+  links with their speed, and a short disk write test. `share_hardware = true` (asked by setup) sends it with the
+  worker's reports, and `labrat worker show` lists it.
+- `labrat setup`: one command that makes a computer a worker, a rat or both. It reads what the computer has,
+  finds the nest, asks a few questions with defaults that suit the computer, shows a summary, then writes the
+  configuration, makes the keys, joins and installs systemd or launchd services, step by step. `--yes`,
+  `--dry-run`, `--no-service` and `--undo`.
+- Joining without a token: a computer asks with the keys it made and shows a code; `labrat approve <code>` lets it
+  in (`labrat joins` lists those waiting). Operators approve their own personal workers; shared computers,
+  someone else's and rats need an admin. Join keys (`labrat key new`) let a set number of computers in until
+  they run out, with no approval.
+
 ## [0.3.0] - 2026-11-01
 
 ### Added

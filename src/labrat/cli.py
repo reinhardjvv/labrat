@@ -160,7 +160,18 @@ def cmd_worker(a) -> int:
     if a.action in ("share", "unshare", "remove", "show"):
         if not a.name:
             raise LabratError("bad_request", f"labrat worker {a.action} <name>")
-        return _show(_client(a).request("workers", name=a.name, args={"action": a.action})) or 0
+        r = _client(a).request("workers", name=a.name, args={"action": a.action})
+        if a.action != "show":
+            return _show(r) or 0
+        from .hardware import lines
+        state = st.good("online") if r["online"] else st.dim("offline")
+        print(f"{st.bold(r['name'])}  {r['owner']}'s, {'shared' if r['shared'] == 'yes' else 'personal'}, {state}")
+        for label, text in [*lines(r.get("hardware") or {}), *([("Stores", ", ".join(s["name"] for s in r["stores"]))] if r.get("stores") else []),
+                            ("Fingerprint", r["fingerprint"])]:
+            print(f"  {st.dim(f'{label:<20}')}{text}")
+        if not r.get("hardware"):
+            print(st.dim("  its owner has not shared its hardware (share_hardware = true in worker.toml)"))
+        return 0
     try:
         cfg = _worker_config(a.config)
     except LabratError:
@@ -194,7 +205,10 @@ def cmd_workers(a):
         gpus = ", ".join(f"{g['name']} {g['memory_gb']:g} GB" for g in w.get("gpus", [])) or st.dim("none")
         state = st.good("online") if w["online"] else st.dim("offline")
         shared = {"yes": "shared", "asked": st.warn("offered"), "no": st.dim("personal")}[w["shared"]]
+        hw = w.get("hardware") or {}
         what = f"{w.get('cpus', '?')} CPUs" + (f", {w['memory_gb']:g} GB" if w.get("memory_gb") else "")
+        if (hw.get("cpu") or {}).get("model"):
+            what = f"{hw['cpu']['model']}, {what}"
         if w.get("backend", "local") != "local":
             what = w["backend"]
         out.append([st.bold(w["name"]), w["owner"], shared, state, what, gpus])
@@ -244,6 +258,58 @@ def cmd_job(a):
         if not a.follow or r["status"] in ("done", "failed", "stopped", "cancelled"):
             return 0
         time.sleep(1)
+
+
+def cmd_setup(a) -> int:
+    from .setup import setup
+    return setup(a)
+
+
+def cmd_decide(a):
+    """approve and deny: a request waiting for a person (a1, a2, ...) or a computer waiting to join (HJKL-4821)."""
+    from .setup import CODE
+    client, st = _client(a), _st()
+    if CODE.match(a.id):
+        if a.cmd == "deny":
+            r = client.deny_join(a.id)
+            print(f"{st.bold(r['name'])} may not join")
+            return 0
+        r = client.approve_join(a.id, a.owner, True if a.shared else None)
+        print(f"{st.bold(r['name'])} joined as {r['owner']}'s {' and '.join(r['roles'])}"
+              + (", shared with the lab" if r.get("shared") else "") + f"  {st.dim('fingerprint ' + r['fingerprint'])}")
+        return 0
+    return _show(client.approve(a.id) if a.cmd == "approve" else client.deny(a.id))
+
+
+def cmd_joins(a):
+    from .term import table
+    st, rows = _st(), _client(a).joins()
+    if a.json:
+        return _show(rows)
+    print(table(["CODE", "COMPUTER", "AS", "SHARED", "FINGERPRINT", "FROM", "ASKED"],
+                [[st.warn(r["code"]), st.bold(r["name"]), " and ".join(r["roles"]), "asks to be" if r["shared"] else "no",
+                  r["fingerprint"], r["address"], st.dim(_ago(r["asked"]))] for r in rows], st, indent=0)
+          if rows else "no computers are waiting to join")
+
+
+def cmd_key(a):
+    from .term import table
+    client, st = _client(a), _st()
+    if a.action == "new":
+        r = client.new_join_key(a.uses, a.hours, a.shared, a.owner, a.role or None)
+        print(f"join key {r['id']}, shown once:\n\n  {r['key']}\n\n{r['uses_left']} use(s), until {r['expires_at']}, "
+              f"as {' and '.join(r['roles'])}, {r['owner']}'s{', shared' if r['shared'] else ''}\n\non each computer: labrat setup --key {r['key']}")
+        return 0
+    if a.action == "revoke":
+        if not a.id:
+            raise LabratError("bad_request", "labrat key revoke <id>")
+        return _show(client.revoke_join_key(a.id))
+    rows = client.join_keys()
+    if a.json:
+        return _show(rows)
+    print(table(["KEY", "USES LEFT", "UNTIL", "AS", "OWNER", "SHARED", "MADE BY"],
+                [[k["id"], str(k["uses_left"]), k["expires_at"][:16].replace("T", " "), " and ".join(k["roles"]), k["owner"],
+                  "yes" if k["shared"] else "no", k["made_by"]] for k in rows], st, indent=0) if rows else "no join keys")
 
 
 def cmd_demo(a) -> int:
@@ -856,6 +922,26 @@ def main(argv=None) -> int:
     s.add_argument("--config")
     s.add_argument("--shared", action="store_true", help="offer it to other people as well (join)")
     s.set_defaults(fn=cmd_worker)
+    s = sub.add_parser("setup", help="make this computer a worker or rat of a lab, in one go (or --undo)")
+    s.add_argument("--key", help="a join key from an admin: joins at once")
+    s.add_argument("--role", choices=["worker", "rat", "both"])
+    s.add_argument("--name", help="what to call this computer (default its host name)")
+    s.add_argument("--shared", action="store_true", help="offer it to the whole lab, once approved")
+    s.add_argument("--when", choices=["idle", "always"], help="when it takes jobs")
+    s.add_argument("--hours", help="take jobs only in these hours, such as 18:00-07:00")
+    s.add_argument("--cpus", help="the most CPUs a job may use")
+    s.add_argument("--store", action="append", metavar="NAME=PATH", help="where a lab store is on this computer")
+    s.add_argument("--yes", "-y", action="store_true", help="no questions: every default")
+    s.add_argument("--dry-run", action="store_true", help="show what it would do, change nothing")
+    s.add_argument("--no-service", action="store_true", help="write the configuration and join, but install no service")
+    s.add_argument("--allow-http", action="store_true", help="plain HTTP to a nest on a public address")
+    s.add_argument("--fast", action="store_true", help="no animations")
+    s.add_argument("--no-benchmark", action="store_true", help="skip the disk speed test")
+    s.add_argument("--share-hardware", dest="share_hardware", action="store_true", default=None, help="share its hardware with the lab")
+    s.add_argument("--keep-hardware", dest="share_hardware", action="store_false", help="keep its hardware to itself")
+    s.add_argument("--root", help=argparse.SUPPRESS)
+    s.add_argument("--undo", action="store_true", help="remove what labrat setup did here")
+    s.set_defaults(fn=cmd_setup)
     s = sub.add_parser("demo", help="a demo lab with simulated instruments")
     s.add_argument("--port", type=int, default=conf.NEST_PORT)
     s.set_defaults(fn=cmd_demo)
@@ -979,8 +1065,16 @@ def main(argv=None) -> int:
     client_cmd("add", "add a device while the nest runs (admins); rat/name adds it on a rat", cmd_add, "name",
                (("--profile",), {}), (("--driver",), {}), *dev)
     client_cmd("remove", "remove a device added with labrat add", lambda a: _show(_client(a).remove_device(a.name)), "name")
-    client_cmd("approve", "approve a waiting request (it then runs)", lambda a: _show(_client(a).approve(a.id)), "id")
-    client_cmd("deny", "deny a waiting request", lambda a: _show(_client(a).deny(a.id)), "id")
+    client_cmd("approve", "approve a waiting request (a1), or let a computer join (its code, such as HJKL-4821)", cmd_decide, "id",
+               (("--owner",), {"help": "whose computer it is (admins; default you)"}),
+               (("--shared",), {"action": "store_true", "help": "share it with the lab (admins)"}))
+    client_cmd("deny", "deny a waiting request, or a computer asking to join", cmd_decide, "id")
+    client_cmd("joins", "computers waiting to join, with their codes", cmd_joins, js)
+    client_cmd("key", "join keys (admins): new, list or revoke", cmd_key,
+               (("action",), {"nargs": "?", "choices": ["new", "list", "revoke"], "default": "list"}), (("id",), {"nargs": "?"}),
+               (("--uses",), {"type": int, "default": 1}), (("--hours",), {"type": float, "default": 24}),
+               (("--shared",), {"action": "store_true"}), (("--owner",), {}),
+               (("--role",), {"action": "append", "choices": ["worker", "rat"], "help": "what it lets in (default worker)"}), js)
     client_cmd("adopt", "adopt a rat; the key is asked for, or read from LABRAT_RAT_KEY", cmd_adopt, "name",
                (("--at",), {"help": "the rat's URL, when discovery cannot see it"}))
     client_cmd("forget", "forget an adopted rat", lambda a: _show(_client(a).forget(a.name)), "name")

@@ -75,10 +75,25 @@ def clean_report(r: dict) -> dict:
         out["stores"] = [{"name": s["name"], "available": bool(s.get("available")),
                           **({"free_gb": f} if (f := _num(s.get("free_gb"), float, 0, 1e9)) is not None else {})}
                          for s in r["stores"][:64] if isinstance(s, dict) and isinstance(s.get("name"), str)]
+    if isinstance(r.get("hardware"), dict):
+        out["hardware"] = clean_value(r["hardware"])
     if isinstance(r.get("limits"), dict):
         out["limits"] = {k: v for k in ("cpus", "gpus", "memory_gb")
                          if (v := _num(r["limits"].get(k), float, 0, 1e7)) is not None}
     return out
+
+
+def clean_value(v, depth: int = 0):
+    """Plain JSON a worker reports about its hardware: short text, numbers, short lists and small tables."""
+    if isinstance(v, bool) or isinstance(v, (int, float)) and not isinstance(v, bool):
+        return v
+    if isinstance(v, str):
+        return v[:120]
+    if isinstance(v, list) and depth < 3:
+        return [clean_value(x, depth + 1) for x in v[:16]]
+    if isinstance(v, dict) and depth < 3:
+        return {str(k)[:40]: clean_value(x, depth + 1) for k, x in list(v.items())[:24]}
+    return None
 
 
 class Workers:
@@ -236,6 +251,10 @@ class Workers:
             if came_back:
                 log.info("worker %s is online", name)
         e = self.entries[name]
+        if action == "leave":                                  # labrat setup --undo on the computer itself
+            self.remove(name)
+            log.info("worker %s left", name)
+            return {"name": name, "removed": True}
         if action == "hello":
             return {"name": name, "owner": e["owner"], "shared": e["shared"], "nest": self.hub.name}
         jobs = getattr(self.hub, "jobs", None)

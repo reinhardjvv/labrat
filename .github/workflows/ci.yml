@@ -15,6 +15,7 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -27,7 +28,11 @@ jobs:
           cache: pip
       - run: pip install -e '.[dev]'
       - run: ruff check src tests tools
-      - run: pytest
+      # each test named as it runs; a run still going after 10 minutes is stopped with SIGABRT, which makes
+      # Python print where every thread was
+      - run: timeout --signal=ABRT 10m python -X faulthandler -m pytest -v -p no:cacheprovider
+        env:
+          PYTHONUNBUFFERED: "1"        # progress reaches the log as it happens, even if a run hangs
       - run: python tools/check_repo.py
 
   build:

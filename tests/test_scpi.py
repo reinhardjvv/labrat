@@ -1,8 +1,8 @@
 import socket
-import threading
 import time
 
 import pytest
+from conftest import Listener
 
 from labrat.drivers import build
 from labrat.message import LabratError
@@ -12,43 +12,38 @@ class FakeInstrument:
     """A line-based SCPI instrument on localhost that remembers what it was told."""
 
     def __init__(self):
-        self.sock = socket.socket()
-        self.sock.bind(("127.0.0.1", 0))
-        self.sock.listen()
-        self.port = self.sock.getsockname()[1]
         self.received, self.volt = [], "0"
-        threading.Thread(target=self._serve, daemon=True).start()
+        self.server = Listener(self._handle)
+        self.port = self.server.port
 
-    def _serve(self):
-        while True:
-            try:
-                conn, _ = self.sock.accept()
-            except OSError:
-                return
-            with conn, conn.makefile("rwb") as f:
-                for line in f:
-                    cmd = line.decode().strip()
-                    self.received.append(cmd)
-                    if cmd.startswith("VOLT "):
-                        self.volt = cmd.split()[1]
-                    elif cmd == "VOLT?":
-                        f.write(f"{float(self.volt):.3E}\n".encode())
-                        f.flush()
-                    elif cmd == "CURV?":
-                        data = bytes([0, 1, 2, 255, 128])
-                        f.write(b"#15" + data + b"\n")
-                        f.flush()
-                    elif cmd == "WAVE?":
-                        import struct
-                        data = struct.pack(">3h", 1, -2, 300)
-                        f.write(b"#16" + data + b"\n")
-                        f.flush()
-                    elif cmd == "TRACE?":
-                        f.write(b"1.5,-2.25,3e3\n")
-                        f.flush()
-                    elif cmd == "*IDN?":
-                        f.write(b"ACME,PSU-1,0,1.0\n")
-                        f.flush()
+    def close(self):
+        self.server.close()
+
+    def _handle(self, conn):
+        with conn.makefile("rwb") as f:
+            for line in f:
+                cmd = line.decode().strip()
+                self.received.append(cmd)
+                if cmd.startswith("VOLT "):
+                    self.volt = cmd.split()[1]
+                elif cmd == "VOLT?":
+                    f.write(f"{float(self.volt):.3E}\n".encode())
+                    f.flush()
+                elif cmd == "CURV?":
+                    data = bytes([0, 1, 2, 255, 128])
+                    f.write(b"#15" + data + b"\n")
+                    f.flush()
+                elif cmd == "WAVE?":
+                    import struct
+                    data = struct.pack(">3h", 1, -2, 300)
+                    f.write(b"#16" + data + b"\n")
+                    f.flush()
+                elif cmd == "TRACE?":
+                    f.write(b"1.5,-2.25,3e3\n")
+                    f.flush()
+                elif cmd == "*IDN?":
+                    f.write(b"ACME,PSU-1,0,1.0\n")
+                    f.flush()
 
 
 @pytest.fixture
@@ -60,7 +55,7 @@ def psu():
                         "functions": {"Identify": {"query": "*IDN?"}}})
     yield inst, dev
     dev.close()
-    inst.sock.close()
+    inst.close()
 
 
 def test_attributes_and_functions_come_from_the_configuration(psu):
@@ -100,7 +95,7 @@ def test_raw_query_only_sends_queries():
             dev.call("Query", {"command": "*IDN?;VOLT 99"})
     finally:
         dev.close()
-        inst.sock.close()
+        inst.close()
 
 
 def test_an_unreachable_instrument_is_a_device_error():
@@ -130,4 +125,4 @@ def test_scopes_and_analysers_send_their_data():
         assert dev.call("Identify").startswith("ACME")              # the link is still in step after binary data
     finally:
         dev.close()
-        inst.sock.close()
+        inst.close()

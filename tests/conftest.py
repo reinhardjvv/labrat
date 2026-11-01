@@ -1,4 +1,6 @@
 import json
+import socket
+import threading
 import urllib.request
 
 import pytest
@@ -41,6 +43,47 @@ outputs = { heater = 17 }
 inputs = { door = 22 }
 safe = { heater = false }
 '''
+
+
+class Listener:
+    """A localhost TCP server for a fake device, handling each connection in a thread with handle(conn).
+
+    close() stops the thread before it closes the socket. A thread still waiting in accept() on a socket closed
+    under it can end up accepting on whatever socket is opened next with the same file number, such as the next
+    test's nest, and take its connections."""
+
+    def __init__(self, handle):
+        self.sock = socket.socket()
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen()
+        self.port = self.sock.getsockname()[1]
+        self._stop = threading.Event()
+        self.thread = threading.Thread(target=self._serve, args=(handle,), daemon=True)
+        self.thread.start()
+
+    def _serve(self, handle):
+        while True:
+            try:
+                conn, _ = self.sock.accept()
+            except OSError:
+                return
+            if self._stop.is_set():
+                conn.close()
+                return
+            with conn:
+                handle(conn)
+
+    def getsockname(self):
+        return self.sock.getsockname()
+
+    def close(self):
+        self._stop.set()
+        try:                                                  # wakes the accept() so the thread can see it is done
+            socket.create_connection(("127.0.0.1", self.port), timeout=2).close()
+        except OSError:
+            pass
+        self.thread.join(5)
+        self.sock.close()
 
 
 def load(tmp_path, kind, text):

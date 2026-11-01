@@ -19,7 +19,7 @@ from .message import LabratError, Message, fail, ok, parse, role_allows
 log = logging.getLogger("labrat")
 SECRET_ARGS = ("key", "password", "token", "secret")
 LONG = 1024                               # longer values (frames, files) go into the audit log as their size and hash
-JOB_REFUSED = {"adopt", "forget", "users", "device", "probe", "capture", "approve", "deny"}   # what a job's token may never do
+JOB_REFUSED = {"adopt", "forget", "users", "device", "probe", "capture", "approve", "deny", "join"}   # what a job's token may never do
 
 
 @dataclass(frozen=True)
@@ -95,6 +95,7 @@ class Hub:
         self.bench = None                                             # scan, probe, capture, profiles, devices added live
         self.workers = None                                           # set by the nest: computers that run jobs
         self.jobs = None                                              # set by the nest: the jobs they run
+        self.joins = None                                             # set by the nest: computers asking to join
         self._ctx = threading.local()
         self._streams: dict[tuple, dict] = {}                         # fast changes through a lease, counted (audit)
         if require_lock is True:
@@ -133,6 +134,7 @@ class Hub:
                     msg.op in ("device", "capture", "profile") and msg.args.get("action") in ("add", "remove", "start", "stop", "save")) or (
                     msg.op in ("users", "workers") and msg.args.get("action") in ("add", "remove", "join", "share", "unshare")) or (
                     msg.op == "job" and msg.args.get("action") in ("submit", "stop")) or (
+                    msg.op == "join" and msg.args.get("action") in ("approve", "deny", "key_new", "key_revoke")) or (
                     msg.op == "lease" and msg.args.get("action", "grant") in ("grant", "release")) or (
                     msg.op in ("record", "experiment") and msg.args.get("action") in ("start", "stop", "note")):
                 self.audit(who, msg, True)
@@ -170,6 +172,10 @@ class Hub:
             if self.bench is None:
                 raise LabratError("not_found", f"this {self.role} has no workbench")
             return ok(self.bench.op(m, who))
+        if m.op == "join":
+            if self.joins is None:
+                raise LabratError("not_found", f"computers join a nest; this is a {self.role}")
+            return ok(self.joins.op(m, who))
         if m.op == "job":
             if self.jobs is None:
                 raise LabratError("not_found", f"jobs run at a nest; this is a {self.role}")
@@ -375,6 +381,20 @@ class Hub:
         return {"devices": devices, "people": people,
                 **({"require_lock": self.require_lock} if self.require_lock else {}),
                 **({"workers": self.workers.who()} if self.workers is not None and self.workers.entries else {})}
+
+    def join_request(self, body: bytes, address: str) -> tuple[int, dict]:
+        """A computer asking to join, or asking how its request stands (joins.py). Only a nest takes them."""
+        try:
+            if self.joins is None:
+                raise LabratError("not_found", f"computers join a nest; this is a {self.role}")
+            obj = json.loads(body or b"{}")
+            if not isinstance(obj, dict):
+                raise LabratError("bad_request", "a join request is a JSON object")
+            return 200, ok(self.joins.request(obj, address))
+        except LabratError as e:
+            return e.status, fail(e)
+        except ValueError:
+            return 400, fail(LabratError("bad_request", "the body is not valid JSON"))
 
     def worker_request(self, header: str | None, body: bytes) -> tuple[int, bytes, str | None]:
         """A signed request from a worker (workers.py). Only a nest has workers."""

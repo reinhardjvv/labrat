@@ -139,6 +139,7 @@ A bench instrument needs no code. Its commands go in a few lines of configuratio
 | 2 | each bench computer | `sudo ./packaging/install.sh rat` ([install](docs/install.md#a-rat)) |
 | 3 | anywhere | `labrat find` lists the rats on the network |
 | 4 | anywhere | `labrat adopt <rat>` adds one to the nest, with the key the rat shows |
+| or | any computer | `labrat setup` makes it a worker or a rat in one go: it asks, shows a code, and `labrat approve <code>` lets it in ([workers](docs/workers.md#joining)) |
 
 Any 64-bit Linux runs a nest or a rat. Good defaults are Ubuntu Server LTS or Debian for the nest, and
 Raspberry Pi OS Lite (64-bit), DietPi or Armbian for rats on single-board computers

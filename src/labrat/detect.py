@@ -8,9 +8,13 @@ from __future__ import annotations
 
 import glob
 import os
+import subprocess
+import sys
 
 
 def resources() -> dict[str, list[str]]:
+    if sys.platform == "darwin":                               # USB serial ports; macOS has no USBTMC or GPIO files
+        return {"serial": sorted(glob.glob("/dev/cu.usb*")), "usbtmc": [], "gpio": []}
     by_id = sorted(glob.glob("/dev/serial/by-id/*"))           # names that survive replugging
     seen = {os.path.realpath(p) for p in by_id}
     plain = [p for p in sorted(glob.glob("/dev/ttyUSB*") + glob.glob("/dev/ttyACM*")) if p not in seen]
@@ -23,6 +27,8 @@ SYS = "/sys"
 
 def usb_devices(sys_root: str | None = None) -> list[dict]:
     """USB devices with their vendor:product, names, serial and the device files they bring (tty, hidraw, usbtmc)."""
+    if sys.platform == "darwin" and sys_root is None:
+        return mac_usb_devices()
     root = sys_root or SYS
     nodes: dict[str, list[str]] = {}
     for cls, pattern in (("tty", "ttyUSB*"), ("tty", "ttyACM*"), ("hidraw", "hidraw*"), ("usbmisc", "usbtmc*")):
@@ -126,3 +132,45 @@ def rat_config(name: str, extra: str = "") -> str:
     if not any(found.values()):
         lines += ["# No serial ports, USBTMC instruments or GPIO chips were found on this computer.", ""]
     return "\n".join(lines)
+
+
+def mac_usb_devices(tree: bytes | None = None) -> list[dict]:
+    """USB devices from the macOS I/O Registry (ioreg -a), with the serial ports each brings (/dev/cu.*)."""
+    import plistlib
+    if tree is None:
+        try:
+            tree = subprocess.run(["ioreg", "-a", "-r", "-c", "IOUSBHostDevice", "-l"], capture_output=True, timeout=10).stdout
+        except (OSError, subprocess.SubprocessError):
+            return []
+    if not tree.strip():
+        return []
+    try:
+        roots = plistlib.loads(tree)
+    except Exception:
+        return []
+
+    def ports(node: dict) -> list[str]:
+        found = [node["IOCalloutDevice"]] if isinstance(node.get("IOCalloutDevice"), str) else []
+        for child in node.get("IORegistryEntryChildren") or []:
+            if isinstance(child, dict) and "idVendor" not in child:          # not a device of its own behind a hub
+                found += ports(child)
+        return found
+
+    out = []
+
+    def walk(node: dict) -> None:
+        if not isinstance(node, dict):
+            return
+        if "idVendor" in node and "idProduct" in node:
+            def text(*keys):
+                return next((str(node[k]) for k in keys if node.get(k)), "")
+            out.append({"usb": f"{int(node['idVendor']):04x}:{int(node['idProduct']):04x}",
+                        "manufacturer": text("USB Vendor Name", "kUSBVendorString"),
+                        "product": text("USB Product Name", "kUSBProductString"),
+                        "serial": text("USB Serial Number", "kUSBSerialNumberString"),
+                        "bus": "", "address": str(node.get("USB Address", "")), "files": sorted(ports(node))})
+        for child in node.get("IORegistryEntryChildren") or []:
+            walk(child)
+    for r in roots if isinstance(roots, list) else [roots]:
+        walk(r)
+    return [u for u in out if not u["product"].lower().endswith("hub")]
