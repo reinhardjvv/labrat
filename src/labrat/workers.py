@@ -236,6 +236,10 @@ class Workers:
             if came_back:
                 log.info("worker %s is online", name)
         e = self.entries[name]
+        if action == "leave":                                  # labrat setup --undo on the computer itself
+            self.remove(name)
+            log.info("worker %s left", name)
+            return {"name": name, "removed": True}
         if action == "hello":
             return {"name": name, "owner": e["owner"], "shared": e["shared"], "nest": self.hub.name}
         jobs = getattr(self.hub, "jobs", None)

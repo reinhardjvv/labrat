@@ -9,6 +9,7 @@
     GET  /api/v1/files/<path>[?person=<person>]
                                      a file from your own experiments, whole (admins may name another person)
     POST /api/v1/worker              a worker's signed request for work (nest only, workers.py)
+    POST /api/v1/join                a computer asking to join, before it has anything to sign with (joins.py)
 
 Every route but health and worker needs 'Authorization: Bearer <token>'. A worker signs each request instead.
 """
@@ -179,6 +180,15 @@ def make_handler(hub: Hub):
             path = self.path.split("?")[0].rstrip("/")
             if path == "/api/v1/worker":
                 return self._worker()
+            if path == "/api/v1/join":
+                try:
+                    length = int(self.headers.get("Content-Length") or 0)
+                except ValueError:
+                    length = -1
+                if not 0 < length <= 64 << 10:
+                    return self._send(400, fail(LabratError("bad_request", "send a JSON body of at most 64 KB")))
+                status, reply = hub.join_request(self.rfile.read(length), self.client_address[0])
+                return self._send(status, reply)
             try:
                 who = hub.authenticate(self.headers.get("Authorization"))
                 if path != "/api/v1/message":

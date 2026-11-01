@@ -276,6 +276,31 @@ class Client:
         """
         return DirectDevice(self, device, minutes)
 
+    # -- computers joining ----------------------------------------------------------------------------------
+    def joins(self) -> list[dict]:
+        """Computers waiting for someone to approve their code."""
+        return self.request("join", args={"action": "list"})
+
+    def approve_join(self, code: str, owner: str | None = None, shared: bool | None = None) -> dict:
+        """Let a waiting computer in: as your own personal worker, or (admins) someone else's or shared."""
+        return self.request("join", name=code, args={"action": "approve", **({"owner": owner} if owner else {}),
+                                                     **({"shared": shared} if shared is not None else {})})
+
+    def deny_join(self, code: str) -> dict:
+        return self.request("join", name=code, args={"action": "deny"})
+
+    def new_join_key(self, uses: int = 1, hours: float = 24, shared: bool = False, owner: str | None = None,
+                     roles: list | None = None) -> dict:
+        """A join key (admins): computers that run labrat setup --key with it join at once. Shown this once."""
+        return self.request("join", args={"action": "key_new", "uses": uses, "hours": hours, "shared": shared,
+                                          **({"owner": owner} if owner else {}), **({"roles": roles} if roles else {})})
+
+    def join_keys(self) -> list[dict]:
+        return self.request("join", args={"action": "keys"})
+
+    def revoke_join_key(self, key_id: str) -> dict:
+        return self.request("join", name=key_id, args={"action": "key_revoke"})
+
     # -- workers and jobs -----------------------------------------------------------------------------------
     def workers(self) -> list[dict]:
         """The computers that run jobs, with their owner, sharing and what each has."""

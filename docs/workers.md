@@ -6,15 +6,62 @@ listens for connections, and its owner decides in `worker.toml` what it takes.
 
 ## Joining
 
-On the computer, with LABRAT installed and your own token in `LABRAT_TOKEN`:
+On the computer, with LABRAT installed (`pipx install labrat-lab`):
 
 ```bash
-labrat worker init          # writes worker.toml with the nest's address
-labrat worker join          # joins it as your worker
-labrat worker               # runs it
+labrat setup
 ```
 
-`labrat service worker` prints a systemd unit that keeps it running.
+`labrat setup` looks at the computer (CPUs, memory, GPUs, network shares, displays and instruments plugged in),
+finds the nest on the network, and asks what the computer should be: a worker, a rat for the devices it found, or
+both. It asks who may use it, when it takes jobs, how many CPUs they may use and which network shares are the
+lab's stores, with defaults that suit the computer (a laptop takes jobs only while nobody is logged in). It then
+shows a summary and changes nothing until you say yes.
+
+The computer never needs anyone's token. It makes its own keys and shows a code:
+
+```text
+  ┌─ Approve this computer ───────────────────────────────────┐
+  │  Code           HJKL-4821                                 │
+  │  Fingerprint    3f2a-91c0-77de                            │
+  │  On a signed-in computer, run:                            │
+  │  labrat approve HJKL-4821                                 │
+  └───────────────────────────────────────────────────────────┘
+```
+
+Whoever approves the code on a computer that is signed in sees its name, fingerprint and what it asks for
+(`labrat joins` lists those waiting). Compare the fingerprint with the one on the computer's screen. Anyone with
+an operator token may approve a computer as their own personal worker; joining as shared, for someone else
+(`--owner`) or as a rat needs an admin. A code runs out after ten minutes, and `labrat deny <code>` refuses one.
+
+For many computers at once, an admin makes a join key, and each computer joins with it without waiting:
+
+```bash
+labrat key new --uses 20 --hours 24 --shared --owner lab --role worker --role rat
+labrat setup --key lk_...                 # on each computer
+labrat key                                # what each key has left
+labrat key revoke 3f9a1c2e
+```
+
+A key says how many computers it lets in, until when, as what, whose they are and whether they are shared.
+Revoking it stops new joins; computers that already joined stay.
+
+Once approved, setup writes the configuration, starts the services and lists each step as it does it: systemd
+system services as root (running as the `labrat` user), systemd user services otherwise, launchd on a Mac.
+
+| Option | Meaning |
+| --- | --- |
+| `--url` | the nest, when discovery cannot see it |
+| `--key` | a join key: no approval needed |
+| `--role`, `--name`, `--shared`, `--when`, `--hours`, `--cpus`, `--store NAME=PATH` | answers given up front |
+| `--yes` | no questions: every default and the answers given |
+| `--dry-run` | the summary only; nothing is written, joined or started |
+| `--no-service` | write and join, but start no service |
+| `--undo` | stop and remove the services, remove the files setup wrote, and take the worker out of the nest |
+
+Setup lists everything it writes in `setup.json` in the state folder, which `--undo` reads. The steps behind it
+can still be run by hand: `labrat worker init`, `labrat worker join` with your own token in `LABRAT_TOKEN`, and
+`labrat worker` to run it (`labrat service worker` prints a systemd unit).
 
 A worker joins as **personal** or **shared**:
 

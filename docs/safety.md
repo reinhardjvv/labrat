@@ -105,7 +105,9 @@ path its commands take.
 ## Workers
 
 Workers connect out to the nest with signed requests and run what their owners allow ([workers](workers.md#security)).
-A personal worker runs its owner's jobs only; sharing one needs its owner to offer it and an admin to agree.
+A computer joins without anyone's token: it sends the keys it made and waits for a person to approve the code
+it shows, or uses a join key an admin made with a limited number of uses and an end. An operator approves only
+their own personal worker; shared computers, someone else's and rats need an admin. A personal worker runs its owner's jobs only; sharing one needs its owner to offer it and an admin to agree.
 A job runs with a clean environment and a token of its own that changes only the devices the job names, and
 `[[approvals]]` with `ops = ["job"]` makes chosen people's or agents' jobs wait for a person.
 
