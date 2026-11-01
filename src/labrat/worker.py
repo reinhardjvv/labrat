@@ -100,6 +100,9 @@ def check_config(cfg: dict, where: str = "worker.toml") -> dict:
             raise LabratError("bad_request", f"{where}: {k} is a whole number")
     if "memory_gb" in cfg and (not isinstance(cfg["memory_gb"], (int, float)) or cfg["memory_gb"] <= 0):
         raise LabratError("bad_request", f"{where}: memory_gb is a positive number")
+    if cfg["backend"] != "local":
+        from .batch import check_batch
+        check_batch(cfg, where)
     for name, s in cfg["stores"].items():
         conf.check_name(name, "store")
         if not isinstance(s, dict) or not s.get("path"):
@@ -314,7 +317,11 @@ class Worker:
             self.parts.pop(key, None)
         reply = self.post("next", {"report": self.report(), "wait": self.wait, "running": running}, timeout=self.wait + 15)
         for payload in reply.get("parts", []):
-            part = Part(self, payload)
+            if self.cfg["backend"] == "local":
+                part = Part(self, payload)
+            else:
+                from .batch import BatchPart
+                part = BatchPart(self, payload)
             self.parts[(part.job, part.rank)] = part
             part.start()
         for s in reply.get("stop", []):
@@ -444,14 +451,7 @@ class Part:
             if self.dir.exists():
                 shutil.rmtree(self.dir)
             (self.dir / "tmp").mkdir(parents=True, mode=0o700)
-            cmd = self.command()
-            self.proc = subprocess.Popen(cmd, cwd=self.dir, env=self.environment(), stdout=subprocess.PIPE,
-                                         stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
-            self.cpus()
-            log.info("job %d rank %d (%s for %s) started", self.job, self.rank, self.p["name"], self.p["person"])
-            if self._send("started").get("stop"):
-                self.stop("stopped from the nest")
-            code, error = self._watch()
+            code, error = self.execute()
         except LabratError as e:
             error = e.message
         except OSError as e:
@@ -464,8 +464,22 @@ class Part:
                     break
                 except LabratError:
                     time.sleep(2)
-            shutil.rmtree(self.dir, ignore_errors=True)
+            self.cleanup()
             log.info("job %d rank %d ended: %s", self.job, self.rank, error or f"exit code {code}")
+
+    def cleanup(self) -> None:
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def execute(self) -> tuple[int | None, str | None]:
+        """Run it here, as a process of its own."""
+        cmd = self.command()
+        self.proc = subprocess.Popen(cmd, cwd=self.dir, env=self.environment(), stdout=subprocess.PIPE,
+                                     stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
+        self.cpus()
+        log.info("job %d rank %d (%s for %s) started", self.job, self.rank, self.p["name"], self.p["person"])
+        if self._send("started").get("stop"):
+            self.stop("stopped from the nest")
+        return self._watch()
 
     def _read(self) -> None:
         for raw in self.proc.stdout:

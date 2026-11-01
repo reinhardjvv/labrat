@@ -129,6 +129,62 @@ who = ["claude-*"]
 ops = ["job"]
 ```
 
+## Clusters
+
+A worker on a cluster's login node hands each job to the cluster's scheduler instead of running it itself. It runs
+under your own account there, so the cluster's own rules and accounting apply, and the nest never logs in
+anywhere.
+
+```toml
+backend = "slurm"             # that is all Slurm needs; everything below is optional
+
+[slurm]
+partition = "gpu"
+account = "my-group"
+extra = ["--qos=normal"]                          # more sbatch options
+setup = "module load cuda/12.4"                   # lines run before the job
+container = "apptainer exec --nv ~/labrat.sif"    # run the script inside a container
+template = "~/labrat-job.sbatch"                  # a batch script of your own in place of LABRAT's
+gres = "gpu:{gpus}"                               # how GPUs are asked for
+export = "NONE"                                   # sbatch --export
+workdir = "/scratch/labrat"                       # where each job's folder goes, seen by the compute nodes
+keep = true                                       # keep each job's folder after it ends
+poll_s = 10                                       # how often the job's state is checked
+
+[slurm.commands]                                  # each one can be replaced, for a wrapper or another path
+submit = "sbatch --parsable {script}"
+status = "squeue -h -j {id} -o %T"
+accounting = "sacct -n -P -X -j {id} -o State,ExitCode"
+interrupt = "scancel --signal=INT --full {id}"
+cancel = "scancel {id}"
+```
+
+For each job the worker writes the job's files and a batch script into a folder of its own under `workdir`,
+submits it, follows it with `status` until it ends, takes the exit code from `accounting`, and passes on what the
+job writes to its output as it appears. What the job needs becomes sbatch options: `--cpus` becomes
+`--cpus-per-task`, `--memory` becomes `--mem`, `--gpus` becomes `--gres`, `--minutes` becomes `--time` and
+`--exclusive` stays `--exclusive`. Stop sends `interrupt` (Ctrl-C to every task) and, 10 s later, `cancel`.
+
+A job for several workers (`--nodes 4`) that goes to a cluster becomes one allocation of four nodes with one
+task on each. `srun` starts the tasks, each with its own `RANK`, and the first node is `MASTER_ADDR`, so the same
+script runs on two workstations with a fast link or on four cluster nodes with InfiniBand. The parts talk over the
+cluster's own network; nothing between them passes through the worker or the nest.
+
+The job's variables, its token among them, go into `job.env` in its folder, readable by your account only, and
+never onto a command line or into the batch script. `PATH`, the modules and the GPUs come from the compute node,
+your login profile (the script starts with `#!/bin/bash -l`) and `setup`. Set `python` in `worker.toml` to a
+Python the compute nodes have, or use `container`.
+
+In a template of your own, `{job_name}`, `{workdir}`, `{nodes}`, `{options}` (the `#SBATCH` lines),
+`{setup}`, `{container}`, `{command}`, `{cpus}`, `{gpus}`, `{minutes}` and `{job}` are filled in, and anything
+else, such as `${HOME}`, is left alone. Another scheduler works the same way with `backend = "batch"`, a
+`template`, and `submit`, `status`, `accounting` and `cancel` under `[batch.commands]`; `accounting` must print
+`STATE|EXIT` (such as `COMPLETED|0`).
+
+The nest does not check a cluster's CPUs and GPUs: the scheduler decides what fits. Compute nodes often cannot
+reach the lab network. A job that needs the nest (to read a device, write a note) needs nodes that can reach it;
+one that only computes does not.
+
 ## worker.toml
 
 `labrat worker` reads `worker.toml` from `--config`, `/etc/labrat/` or `~/.config/labrat/`. Unknown settings are an

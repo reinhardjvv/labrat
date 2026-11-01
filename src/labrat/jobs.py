@@ -92,8 +92,6 @@ def check_spec(spec: dict, devices_exist) -> dict:
     nodes = int(needs.get("nodes") or len(on) or 1)
     if not 1 <= nodes <= 256:
         raise LabratError("bad_request", "a job runs on 1 to 256 workers")
-    if on and nodes > len(on):
-        raise LabratError("bad_request", f"the job needs {nodes} workers and names {len(on)}")
     devices = spec.get("devices") or []
     if not isinstance(devices, list) or not all(isinstance(d, str) for d in devices):
         raise LabratError("bad_request", "devices is a list of device ids the job may change")
@@ -213,6 +211,9 @@ class Jobs:
                 raise LabratError("forbidden", f"{w} does not take {person}'s jobs")
         if not spec["on"] and not any(self.workers.allows(w, person) for w in self.workers.entries):
             raise LabratError("not_found", f"no worker takes {person}'s jobs yet (labrat worker join on a computer of yours)")
+        n = spec["needs"]["nodes"]
+        if spec["on"] and n > len(spec["on"]) and not any(self._batch(w) for w in spec["on"]):
+            raise LabratError("bad_request", f"the job needs {n} workers and names {len(spec['on'])}")
         with self._lock:
             jid = self._next
             self._next += 1
@@ -253,6 +254,10 @@ class Jobs:
     def _active(self, worker: str) -> list[dict]:
         return [p for j in self.jobs.values() if j["status"] == "running" for p in j["parts"]
                 if p.get("worker") == worker and p["status"] in ("starting", "running")]
+
+    def _batch(self, worker: str) -> bool:
+        """True for a worker that hands jobs to a scheduler, which runs a job of any size as one allocation."""
+        return self.workers.report(worker).get("backend", "local") != "local"
 
     def _fits(self, j: dict, worker: str) -> bool:
         w = self.workers
@@ -298,11 +303,20 @@ class Jobs:
             pool = j["spec"]["on"] or list(self.workers.entries)
             fit = self._order(j, [n for n in pool if self._fits(j, n)])
             n = j["spec"]["needs"]["nodes"]
-            if len(fit) < n:
+            if n > 1:                                              # several computers at once, or one cluster
+                group = [w for w in fit if not self._batch(w)]
+                cluster = [w for w in fit if self._batch(w)]
+                if len(group) >= n:
+                    fit = group
+                elif cluster:
+                    fit, j["parts"] = cluster[:1], j["parts"][:1]
+                else:
+                    continue
+            if len(fit) < len(j["parts"]):
                 continue
-            chosen = fit[:n]
+            chosen = fit[:len(j["parts"])]
             leader = self.workers.report(chosen[0])
-            leader_addr = "127.0.0.1" if n == 1 else (leader.get("link") or (leader.get("addresses") or ["127.0.0.1"])[0])
+            leader_addr = "127.0.0.1" if len(chosen) == 1 else (leader.get("link") or (leader.get("addresses") or ["127.0.0.1"])[0])
             for part, worker in zip(j["parts"], chosen, strict=True):
                 part.update(worker=worker, status="starting", _since=time.monotonic(), _delivered=False)
             j.update(status="running", started=_now(), leader=leader_addr, port=int(leader.get("link_port", 29500)))
@@ -315,7 +329,7 @@ class Jobs:
 
     def _payload(self, j: dict, part: dict) -> dict:
         spec = j["spec"]
-        return {"job": j["id"], "rank": part["rank"], "world_size": len(j["parts"]), "name": j["name"], "person": j["person"],
+        return {"job": j["id"], "rank": part["rank"], "world_size": spec["needs"]["nodes"], "name": j["name"], "person": j["person"],
                 "by": j["by"], "script": spec["script"], "files": spec["files"], "args": spec["args"], "env": spec["env"],
                 "needs": spec["needs"], "exclusive": spec["exclusive"], "devices": spec["devices"], "leader": j["leader"],
                 "port": j["port"], **({"minutes": spec["minutes"]} if "minutes" in spec else {})}

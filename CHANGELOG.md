@@ -20,6 +20,10 @@ All notable changes to LABRAT are recorded here. The format follows
   time limit. Each part runs with a clean environment and a token derived on both sides that acts as the person
   but changes only the job's devices. `[[approvals]]` can make jobs wait with `ops = ["job"]`. MCP tools
   `labrat_job` and `labrat_workers`.
+- Clusters: `backend = "slurm"` in `worker.toml` hands each job to Slurm from the login node, with partition,
+  account, extra options, setup lines, a container, a template and every command configurable. A job for several
+  nodes becomes one allocation with `srun` giving each task its rank. `backend = "batch"` drives another
+  scheduler from a template and four commands.
 - The audit log keeps long values, such as frames sent to a display, as their size and SHA-256.
 
 ## [0.2.0] - 2026-10-30

@@ -70,6 +70,7 @@ lost Wi-Fi link then leaves the equipment safe.
 | `labrat/rat.py` | the rat, its key and its watchdog |
 | `labrat/workers.py` | the nest's workers: joining, sharing and what each reports |
 | `labrat/worker.py` | a worker: `worker.toml`, its key, what the computer has, and running each part of a job |
+| `labrat/batch.py` | jobs handed to Slurm or another batch scheduler from a cluster's login node |
 | `labrat/jobs.py` | jobs: checking, queueing and placing them, groups across workers, and their tokens |
 | `labrat/job.py` | what a script running as a job imports: its rank, world size and client |
 | `labrat/signing.py` | signed requests and replies between the nest and its workers |
