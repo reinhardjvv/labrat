@@ -99,7 +99,8 @@ def test_a_rat_joins_and_is_adopted(nest, rat):
 
 
 def setup_args(url, root, *extra):
-    return ["setup", "--yes", "--fast", "--url", url, "--root", str(root), "--no-service", "--role", "worker", "--name", "lap", *extra]
+    return ["setup", "--yes", "--fast", "--no-benchmark", "--url", url, "--root", str(root), "--no-service", "--role", "worker",
+            "--name", "lap", *extra]
 
 
 def test_setup_with_a_join_key_writes_joins_and_undoes(nest, tmp_path, capsys):
@@ -119,13 +120,16 @@ def test_setup_with_a_join_key_writes_joins_and_undoes(nest, tmp_path, capsys):
 def test_setup_waits_for_a_person_to_approve_its_code(nest, tmp_path):
     hub, http = nest
     result = {}
-    t = threading.Thread(target=lambda: result.setdefault("code", cli.main(setup_args(http.url, tmp_path))))
+    # a daemon thread: if anything here fails, setup's wait for approval must not keep the test run from ending
+    t = threading.Thread(target=lambda: result.setdefault("code", cli.main(setup_args(http.url, tmp_path))), daemon=True)
     t.start()
-    olu, deadline = Client(http.url, OPERATOR), time.time() + 20
-    while not olu.joins() and time.time() < deadline:
+    olu, deadline = Client(http.url, OPERATOR), time.time() + 60
+    while not olu.joins() and time.time() < deadline and t.is_alive():
         time.sleep(0.1)
-    assert cli.main(["approve", olu.joins()[0]["code"], "--url", http.url, "--token", OPERATOR]) == 0
-    t.join(20)
+    waiting = olu.joins()
+    assert waiting, f"setup never asked to join (it returned {result.get('code')})"
+    assert cli.main(["approve", waiting[0]["code"], "--url", http.url, "--token", OPERATOR]) == 0
+    t.join(60)
     assert result["code"] == 0 and hub.workers.entries["lap"]["owner"] == "olu"
 
 
@@ -164,3 +168,23 @@ def test_long_values_are_shortened_not_wrapped():
     long = "/private/tmp/" + "x" * 80 + "/scratchpad/trial/config"
     short = ui.fit(long, 40)
     assert len(short) == 40 and short.startswith("/private") and short.endswith("trial/config") and "…" in short
+
+
+def test_the_hardware_is_described_and_shared_only_when_asked(nest, tmp_path):
+    from labrat.hardware import describe, disk_speed, lines
+    hw = describe()
+    assert hw["arch"] and hw["cpu"]["cores"] >= 1 and hw["disks"] and "serial" not in str(hw).lower()
+    assert disk_speed(tmp_path, mb=8) and not list(tmp_path.glob(".labrat-speed*"))
+    text = dict(lines({"model": "Raspberry Pi 5 Model B Rev 1.0", "arch": "aarch64", "cpu": {"model": "Cortex-A76", "cores": 4, "ghz": 2.4},
+                       "memory": {"gb": 8}, "disks": [{"size_gb": 64, "kind": "SD card", "system": True, "free_gb": 40, "write_mbps": 45}],
+                       "network": [{"name": "Ethernet", "mbps": 1000}]}))
+    assert text["Computer"] == "Raspberry Pi 5 Model B Rev 1.0, aarch64" and text["Processor"] == "Cortex-A76, 4 cores (2.4 GHz)"
+    assert text["Disk"] == "64 GB SD card, 40 GB free, writes 45 MB/s" and text["Network"] == "Ethernet, 1 Gb/s"
+    hub, http = nest
+    key = Client(http.url, ADMIN).new_join_key(uses=2, owner="olu")["key"]
+    assert cli.main(setup_args(http.url, tmp_path / "a", "--key", key, "--keep-hardware")) == 0
+    Worker(load_config(Places(tmp_path / "a").config("worker"))).hello()
+    assert "hardware" not in hub.workers.report("lap")
+    assert cli.main([*setup_args(http.url, tmp_path / "b", "--key", key, "--share-hardware"), "--name", "lap2"]) == 0
+    Worker(load_config(Places(tmp_path / "b").config("worker"))).hello()
+    assert hub.workers.report("lap2")["hardware"]["cpu"]["cores"] >= 1

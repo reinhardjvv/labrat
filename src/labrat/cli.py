@@ -160,7 +160,18 @@ def cmd_worker(a) -> int:
     if a.action in ("share", "unshare", "remove", "show"):
         if not a.name:
             raise LabratError("bad_request", f"labrat worker {a.action} <name>")
-        return _show(_client(a).request("workers", name=a.name, args={"action": a.action})) or 0
+        r = _client(a).request("workers", name=a.name, args={"action": a.action})
+        if a.action != "show":
+            return _show(r) or 0
+        from .hardware import lines
+        state = st.good("online") if r["online"] else st.dim("offline")
+        print(f"{st.bold(r['name'])}  {r['owner']}'s, {'shared' if r['shared'] == 'yes' else 'personal'}, {state}")
+        for label, text in [*lines(r.get("hardware") or {}), *([("Stores", ", ".join(s["name"] for s in r["stores"]))] if r.get("stores") else []),
+                            ("Fingerprint", r["fingerprint"])]:
+            print(f"  {st.dim(f'{label:<20}')}{text}")
+        if not r.get("hardware"):
+            print(st.dim("  its owner has not shared its hardware (share_hardware = true in worker.toml)"))
+        return 0
     try:
         cfg = _worker_config(a.config)
     except LabratError:
@@ -194,7 +205,10 @@ def cmd_workers(a):
         gpus = ", ".join(f"{g['name']} {g['memory_gb']:g} GB" for g in w.get("gpus", [])) or st.dim("none")
         state = st.good("online") if w["online"] else st.dim("offline")
         shared = {"yes": "shared", "asked": st.warn("offered"), "no": st.dim("personal")}[w["shared"]]
+        hw = w.get("hardware") or {}
         what = f"{w.get('cpus', '?')} CPUs" + (f", {w['memory_gb']:g} GB" if w.get("memory_gb") else "")
+        if (hw.get("cpu") or {}).get("model"):
+            what = f"{hw['cpu']['model']}, {what}"
         if w.get("backend", "local") != "local":
             what = w["backend"]
         out.append([st.bold(w["name"]), w["owner"], shared, state, what, gpus])
@@ -922,6 +936,9 @@ def main(argv=None) -> int:
     s.add_argument("--no-service", action="store_true", help="write the configuration and join, but install no service")
     s.add_argument("--allow-http", action="store_true", help="plain HTTP to a nest on a public address")
     s.add_argument("--fast", action="store_true", help="no animations")
+    s.add_argument("--no-benchmark", action="store_true", help="skip the disk speed test")
+    s.add_argument("--share-hardware", dest="share_hardware", action="store_true", default=None, help="share its hardware with the lab")
+    s.add_argument("--keep-hardware", dest="share_hardware", action="store_false", help="keep its hardware to itself")
     s.add_argument("--root", help=argparse.SUPPRESS)
     s.add_argument("--undo", action="store_true", help="remove what labrat setup did here")
     s.set_defaults(fn=cmd_setup)

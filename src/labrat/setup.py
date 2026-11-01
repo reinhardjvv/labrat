@@ -62,6 +62,7 @@ class Ui:
         self.cols, self.width, self.label = cols, max(40, min(64, cols - 4)), 26
         e = "\x1b[" if self.tty else None
         self.E = e or ""
+        self.clear = "\r\x1b[2K" if self.tty else ""               # back to the start of the line, cleared
         c = (lambda code: f"{e}{code}m") if e else (lambda code: "")
         self.pink, self.green, self.dim, self.bold = c("38;2;242;163;199"), c("38;2;111;207;151"), c("38;2;135;131;148"), c("1")
         self.yellow, self.red, self.reset, self.sel = c("38;2;242;201;76"), c("38;2;235;87;87"), c("0"), c("38;2;22;21;27;48;2;242;163;199")
@@ -179,7 +180,7 @@ class Ui:
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
     def prompt(self, question: str) -> str:
-        return f"\r{self.E}2K    {self.pink}?{self.reset}  {question:<{self.label - 3}}"
+        return f"{self.clear}    {self.pink}?{self.reset}  {question:<{self.label - 3}}"
 
     def answered(self, question: str, answer: str) -> None:
         if self.tty:
@@ -255,10 +256,10 @@ class Spinner:
         frames, i, ui = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏", 0, self.ui
         while not self.halt.is_set():
             text = self.text() if callable(self.text) else self.text
-            ui.w(f"\r{ui.E}2K    {ui.pink}{frames[i % 10]}{ui.reset}  {ui.dim}{text}{ui.reset}")
+            ui.w(f"{ui.clear}    {ui.pink}{frames[i % 10]}{ui.reset}  {ui.dim}{text}{ui.reset}")
             i += 1
             time.sleep(0.08)
-        ui.w(f"\r{ui.E}2K")
+        ui.w(f"{ui.clear}")
 
     def __enter__(self):
         if self.ui.tty:
@@ -296,19 +297,19 @@ class Installer:
         while th.is_alive() or (ui.tty and not ui.fast and f < 12):
             if ui.tty:
                 filled = min(bar_w, f * bar_w // 12) if th.is_alive() or f < 12 else bar_w
-                ui.w(f"\r{ui.E}2K    {tag} {title:<28}{ui.pink}{'━' * filled}{ui.dim}{'━' * (bar_w - filled)}{ui.reset}")
+                ui.w(f"{ui.clear}    {tag} {title:<28}{ui.pink}{'━' * filled}{ui.dim}{'━' * (bar_w - filled)}{ui.reset}")
             f += 1
             th.join(0.05)
         took = f"{time.time() - t0:.1f}s"
         if error:
-            ui.w(f"\r{ui.E}2K")
+            ui.w(f"{ui.clear}")
             ui.fail(f"{tag} {title}")
             raise error[0]
         v = result.get("v") or []
         lines, head = (v if isinstance(v, tuple) else (v, None))
         head = head or done or title
         pad = max(1, ui.width - 12 - len(ui.plain(head)) - len(took))
-        ui.w(f"\r{ui.E}2K    {ui.green}✓{ui.reset} {tag} {head}{' ' * pad}{ui.dim}{took}{ui.reset}\n")
+        ui.w(f"{ui.clear}    {ui.green}✓{ui.reset} {tag} {head}{' ' * pad}{ui.dim}{took}{ui.reset}\n")
         for d in lines:
             if d.startswith(("/", "~", str(Path.home()))) and " " not in d:      # a path: shortened, never broken
                 ui.line(f"            {ui.dim}{ui.fit(d, ui.width - 12)}{ui.reset}", 0.02)
@@ -370,9 +371,10 @@ def instruments() -> list[dict]:
 
 
 def computer() -> dict:
-    from .worker import gpus, memory_gb
-    return {"cpus": os.cpu_count() or 1, "memory_gb": memory_gb(), "gpus": gpus(), "shares": network_shares(),
-            "devices": instruments(), "laptop": on_battery_power_device(), "host": socket.gethostname().split(".")[0]}
+    from .hardware import describe
+    hw = describe()
+    return {"cpus": os.cpu_count() or 1, "hardware": hw, "shares": network_shares(), "devices": instruments(),
+            "laptop": on_battery_power_device(), "host": socket.gethostname().split(".")[0]}
 
 
 # -- the nest --------------------------------------------------------------------------------------------------------
@@ -538,7 +540,7 @@ def setup(a) -> int:
     try:
         return _setup(a, ui, places)
     except KeyboardInterrupt:
-        ui.w(f"\r{ui.E}2K\n")
+        ui.w(f"{ui.clear}\n")
         ui.line(f"{ui.dim}Stopped. Anything already written is listed by labrat setup --undo, which removes it.{ui.reset}")
         ui.line()
         return 130
@@ -549,13 +551,20 @@ def setup(a) -> int:
 def _setup(a, ui: Ui, places: Places) -> int:
     ui.w(f"{ui.E}?25l" if ui.tty else "")
     ui.section("This computer")
-    with Spinner(ui, "Reading CPUs, memory, GPUs, shares and devices"):
+    with Spinner(ui, "Reading the processor, memory, GPUs, disks, network and devices"):
         pc = computer()
-    ui.row("Processor", f"{pc['cpus']} cores")
-    if pc["memory_gb"]:
-        ui.row("Memory", f"{pc['memory_gb']:g} GB")
-    for g in pc["gpus"] or [None]:
-        ui.row("GPU", f"{g['name']}, {g['memory_gb']:g} GB" if g else f"{ui.dim}none found{ui.reset}")
+    if not a.no_benchmark and not a.dry_run:
+        from .hardware import disk_speed
+        with Spinner(ui, "Measuring how fast the system disk writes (256 MB, removed after)"):
+            speed = disk_speed(places.state)
+        for disk in pc["hardware"].get("disks", []):
+            if disk.get("system") and speed:
+                disk["write_mbps"] = speed
+    from .hardware import lines as hardware_lines
+    for label, text in hardware_lines(pc["hardware"]):
+        ui.row(label, text)
+    if not pc["hardware"].get("gpus"):
+        ui.row("GPU", f"{ui.dim}none found{ui.reset}")
     ui.row("Network shares", ", ".join(pc["shares"]) or f"{ui.dim}none mounted{ui.reset}")
     ui.row("Devices", ", ".join(d["what"] for d in pc["devices"]) or f"{ui.dim}none found{ui.reset}")
 
@@ -601,6 +610,8 @@ def _setup(a, ui: Ui, places: Places) -> int:
         when = {"idle": 0, "always": 1}.get(a.when or "", 0 if pc["laptop"] else 1)
         when = ui.choose("Take jobs", whens, 2 if a.hours else when)
         cfg["shared"] = bool(shared)
+        cfg["share_hardware"] = a.share_hardware if a.share_hardware is not None else (
+            ui.choose("Share its hardware", ["Yes", "No"]) == "Yes")
         if when == "When idle":
             cfg["when"] = "idle"
         elif when == "In set hours":
@@ -622,7 +633,8 @@ def _setup(a, ui: Ui, places: Places) -> int:
         summary += [("Available to", "the lab, once approved" if cfg["shared"] else "its owner"),
                     ("Jobs", ("when idle" if cfg.get("when") == "idle" else f"from {cfg['hours']}" if cfg.get("hours") else "any time")
                      + (f", up to {cfg['cpus']} CPUs" if cfg.get("cpus") else "")),
-                    ("Stores", ", ".join(f"{k} at {v}" for k, v in cfg["stores"].items()) or "none")]
+                    ("Stores", ", ".join(f"{k} at {v}" for k, v in cfg["stores"].items()) or "none"),
+                    ("Hardware", "shared with the lab" if cfg["share_hardware"] else "kept to this computer")]
     if "rat" in roles:
         summary.append(("Rat devices", ", ".join(d["name"] for d in devices) or "none yet"))
     summary += [("Approval", "join key" if join_key else "a person approves a code"),
@@ -646,7 +658,7 @@ def _setup(a, ui: Ui, places: Places) -> int:
             ui.line()
             ui.line(f"{ui.dim}Nothing was changed.{ui.reset}")
             return 1
-    return apply(a, ui, places, url, name, roles, devices, cfg, join_key)
+    return apply(a, ui, places, url, name, roles, devices, cfg, join_key, pc["hardware"])
 
 
 def _problem(check, *args) -> str | None:
@@ -657,11 +669,13 @@ def _problem(check, *args) -> str | None:
         return e.message
 
 
-def apply(a, ui: Ui, places: Places, url: str, name: str, roles: list, devices: list, cfg: dict, join_key: str | None) -> int:
+def apply(a, ui: Ui, places: Places, url: str, name: str, roles: list, devices: list, cfg: dict, join_key: str | None,
+          hw: dict | None = None) -> int:
     from .rat import fingerprint
     from .rat import load_or_create_key as rat_key
     from .worker import load_or_create_key as worker_key
     record = {"nest": url, "name": name, "roles": roles, "files": [], "services": [], "system": places.system}
+    hw = hw or {}
 
     def save_record():
         write_private(places.record, json.dumps(record, indent=2) + "\n", 0o600)
@@ -672,11 +686,13 @@ def apply(a, ui: Ui, places: Places, url: str, name: str, roles: list, devices: 
     if "worker" in roles:
         def write_worker():
             lines = [f'name = "{name}"', f'nest = "{url}"', f'state_dir = "{places.state}"']
-            lines += [f"{k} = {toml_value(cfg[k])}" for k in ("shared", "when", "hours", "cpus") if k in cfg]
+            lines += [f"{k} = {toml_value(cfg[k])}" for k in ("shared", "when", "hours", "cpus", "share_hardware") if k in cfg]
             for s, path in cfg.get("stores", {}).items():
                 lines += ["", f"[stores.{s}]", f'path = "{path}"']
             write_private(places.config("worker"), "# Written by labrat setup. Reference: docs/workers.md\n" + "\n".join(lines) + "\n")
             record["files"].append(str(places.config("worker")))
+            write_private(places.state / "hardware.json", json.dumps(hw, indent=2) + "\n", 0o644)
+            record["files"].append(str(places.state / "hardware.json"))
             keys["worker"] = worker_key(places.state)
             record["files"].append(str(places.state / "worker.key"))
             save_record()

@@ -45,7 +45,7 @@ from .message import LabratError
 
 log = logging.getLogger("labrat")
 KEYS = {"nest", "name", "state_dir", "shared", "people", "accept", "scripts", "when", "hours", "cpus", "gpus",
-        "memory_gb", "backend", "slots", "link", "link_port", "python", "pass_env", "allow_http", "hash", "stores",
+        "memory_gb", "backend", "slots", "link", "link_port", "python", "pass_env", "allow_http", "hash", "stores", "share_hardware",
         "slurm", "batch"}
 REPORT_S = 10                    # the computer's state is read at most this often
 GRACE_S = 10                     # after Ctrl-C, a job has this long before SIGTERM, and as long again before SIGKILL
@@ -80,6 +80,7 @@ def check_config(cfg: dict, where: str = "worker.toml") -> dict:
     cfg.setdefault("pass_env", [])
     cfg.setdefault("allow_http", False)
     cfg.setdefault("hash", False)
+    cfg.setdefault("share_hardware", False)
     cfg.setdefault("stores", {})
     if cfg["accept"] not in ("any", "scripts"):
         raise LabratError("bad_request", f"{where}: accept is \"any\" or \"scripts\"")
@@ -258,10 +259,30 @@ class Worker:
             "people": cfg["people"], "when": cfg["when"], "hours": cfg["hours"], "stores": stores, "limits": limits,
             "host": socket.gethostname(), "platform": platform.platform(terse=True), "python": platform.python_version(),
             "labrat": __version__, "addresses": local_addresses(), "link": cfg["link"],
+            **({"hardware": self.hardware()} if cfg["share_hardware"] else {}),
         }
         self._report = {k: v for k, v in self._report.items() if v is not None}
         self._report_t = time.monotonic()
         return self._report
+
+    def hardware(self) -> dict:
+        """What this computer is (hardware.py), read once, with the disk speed setup measured and free space now."""
+        if getattr(self, "_hardware", None) is None:
+            from .hardware import describe
+            self._hardware = describe()
+            saved = self.state / "hardware.json"
+            if saved.is_file():
+                try:
+                    speeds = [d.get("write_mbps") for d in json.loads(saved.read_text()).get("disks", []) if d.get("system")]
+                except (OSError, ValueError):
+                    speeds = []
+                for d in self._hardware.get("disks", []):
+                    if d.get("system") and speeds and speeds[0]:
+                        d["write_mbps"] = speeds[0]
+        for d in self._hardware.get("disks", []):
+            if d.get("system"):
+                d["free_gb"] = round(shutil.disk_usage("/").free / 1e9, 1)
+        return self._hardware
 
     # -- talking to the nest --------------------------------------------------------------------------------
     def post(self, action: str, body: dict | None = None, timeout: float = 30.0) -> dict:

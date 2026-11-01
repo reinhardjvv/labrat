@@ -54,6 +54,8 @@ system services as root (running as the `labrat` user), systemd user services ot
 | `--url` | the nest, when discovery cannot see it |
 | `--key` | a join key: no approval needed |
 | `--role`, `--name`, `--shared`, `--when`, `--hours`, `--cpus`, `--store NAME=PATH` | answers given up front |
+| `--share-hardware`, `--keep-hardware` | share the computer's hardware with the lab, or not |
+| `--no-benchmark` | skip the disk speed test |
 | `--yes` | no questions: every default and the answers given |
 | `--dry-run` | the summary only; nothing is written, joined or started |
 | `--no-service` | write and join, but start no service |
@@ -79,6 +81,30 @@ labrat workers              # every worker, its owner, sharing, state and what i
 labrat worker show gpu-box  # one worker in full
 labrat worker key           # this computer's worker name and key fingerprint
 ```
+
+## What a computer is
+
+`labrat setup` describes the computer before it asks anything, on Linux (x86 and ARM boards such as a
+Raspberry Pi or a Jetson) and on macOS (Apple silicon and Intel), reading only what needs no root:
+
+```text
+  This computer
+    Computer                MacBook Pro, arm64
+    System                  macOS 26.6
+    Processor               Apple M4 Pro, 12 cores (8 performance, 4 efficiency)
+    Memory                  24 GB LPDDR5
+    GPU                     Apple M4 Pro, 16 cores
+    Disk                    500.3 GB SSD (Apple Fabric), 131.3 GB free, writes 6.6 GB/s
+    Network                 Ethernet, 10 Gb/s
+```
+
+It shows each disk with its size, kind (SSD, NVMe SSD, HDD or SD card), bus and the system disk's free space, and
+each network link that is up with its speed. The write speed comes from a short test: 256 MB written to the state
+folder, flushed and removed (`--no-benchmark` skips it).
+
+Setup then asks whether to share these details with the lab. With `share_hardware = true` in `worker.toml`, the
+worker sends them with every report and `labrat worker show <name>` lists them. Nothing in them identifies the
+computer: no serial numbers, MAC addresses, user names or host names.
 
 ## What a worker reports
 
@@ -318,6 +344,7 @@ error. Every setting is optional except `nest`, which `labrat worker join --url`
 | `pass_env` | none | environment variables a job inherits, such as `["CUDA_HOME"]` |
 | `allow_http` | `false` | allow plain HTTP to a nest on a public address |
 | `hash` | `false` | add a SHA-256 of every output file to the job's record |
+| `share_hardware` | `false` | send the computer's model, processor, memory, GPUs, disks and network links with its reports |
 | `[stores.<name>]` | none | where the lab's stores are on this computer: `path`, and optionally `mount` and `copy` |
 
 ## Security

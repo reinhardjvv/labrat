@@ -80,6 +80,7 @@ lost Wi-Fi link then leaves the equipment safe.
 | `labrat/batch.py` | jobs handed to Slurm or another batch scheduler from a cluster's login node |
 | `labrat/jobs.py` | jobs: checking, queueing and placing them, groups across workers, and their tokens |
 | `labrat/job.py` | what a script running as a job imports: its rank, world size and client |
+| `labrat/hardware.py` | what a computer is: model, system, processor, memory, GPUs, disks, network and disk speed |
 | `labrat/joins.py` | computers asking to join with a code, and join keys |
 | `labrat/setup.py` | `labrat setup`: find out about the computer, ask, join, install the services, undo |
 | `labrat/lease.py` | leases: signed, short permissions to talk to a rat's devices directly |
