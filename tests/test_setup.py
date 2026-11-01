@@ -143,3 +143,24 @@ def test_service_files(tmp_path):
     places.mac = True
     plist = service_text(places, "worker")
     assert "<string>org.labrat.worker</string>" in plist and "KeepAlive" in plist
+
+
+def test_usb_devices_on_macos_come_from_the_io_registry():
+    import plistlib
+
+    from labrat.detect import mac_usb_devices
+    tree = plistlib.dumps([{"idVendor": 0x0699, "idProduct": 0x0346, "USB Product Name": "AFG3252", "USB Vendor Name": "Tektronix",
+                            "IORegistryEntryChildren": [{"IORegistryEntryChildren": [{"IOCalloutDevice": "/dev/cu.usbmodem1101"}]},
+                                                        {"idVendor": 1, "idProduct": 2, "USB Product Name": "USB2.0 Hub"}]}])
+    found = mac_usb_devices(tree)
+    assert found == [{"usb": "0699:0346", "manufacturer": "Tektronix", "product": "AFG3252", "serial": "", "bus": "",
+                      "address": "", "files": ["/dev/cu.usbmodem1101"]}]
+    assert mac_usb_devices(b"") == []
+
+
+def test_long_values_are_shortened_not_wrapped():
+    from labrat.setup import Ui
+    ui = Ui(interactive=False)
+    long = "/private/tmp/" + "x" * 80 + "/scratchpad/trial/config"
+    short = ui.fit(long, 40)
+    assert len(short) == 40 and short.startswith("/private") and short.endswith("trial/config") and "…" in short

@@ -84,6 +84,8 @@ class Ui:
         self.line(f"{self.bold}{title}{self.reset}", 0.1)
 
     def row(self, key: str, value: str) -> None:
+        if len(self.plain(value)) > self.width - self.label:
+            value = self.fit(self.plain(value))
         self.line(f"  {self.dim}{key:<{self.label - 2}}{self.reset}{value}", 0.08)
 
     def note(self, text: str) -> None:
@@ -95,6 +97,17 @@ class Ui:
 
     def fail(self, text: str) -> None:
         self.line(f"  {self.red}✗{self.reset} {text}", 0)
+
+    def fit(self, text: str, room: int | None = None) -> str:
+        """A value made to fit on its line: the home folder as ~, and the middle of a long path left out."""
+        room = room or self.width - self.label
+        text = str(text).replace(str(Path.home()), "~", 1) if str(Path.home()) != "/" else str(text)
+        if len(text) <= room:
+            return text
+        if "/" in text:
+            head, tail = text[:room // 3], text[-(room - room // 3 - 1):]
+            return head + "…" + tail
+        return text[:room - 1] + "…"
 
     def plain(self, s: str) -> str:
         return re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", s)
@@ -297,7 +310,10 @@ class Installer:
         pad = max(1, ui.width - 12 - len(ui.plain(head)) - len(took))
         ui.w(f"\r{ui.E}2K    {ui.green}✓{ui.reset} {tag} {head}{' ' * pad}{ui.dim}{took}{ui.reset}\n")
         for d in lines:
-            for part in textwrap.wrap(d, ui.width - 12):
+            if d.startswith(("/", "~", str(Path.home()))) and " " not in d:      # a path: shortened, never broken
+                ui.line(f"            {ui.dim}{ui.fit(d, ui.width - 12)}{ui.reset}", 0.02)
+                continue
+            for part in textwrap.wrap(ui.fit(d, 400) if str(Path.home()) in d else d, ui.width - 12):
                 ui.line(f"            {ui.dim}{part}{ui.reset}", 0.02)
 
     def finished(self, what: str) -> None:
@@ -339,7 +355,7 @@ def instruments() -> list[dict]:
         what = size.read_text().strip().replace(",", " x ") if size.is_file() else "display"
         found.append({"name": "slm" if fb.name == "fb0" else f"display{fb.name[2:]}", "what": f"Display {fb}, {what}",
                       "config": {"driver": "display", "framebuffer": str(fb)}})
-    if platform.system() == "Linux":
+    if platform.system() in ("Linux", "Darwin"):
         try:
             from .detect import scan
             for row in scan():
@@ -512,6 +528,8 @@ def run(cmd: list[str]) -> None:
 
 # -- the whole thing -------------------------------------------------------------------------------------------------
 def setup(a) -> int:
+    import logging
+    logging.getLogger("labrat").setLevel(logging.ERROR)        # setup says what it does; log lines would break the screen
     places = Places(Path(a.root) if getattr(a, "root", None) else None)
     ui = Ui(interactive=not a.yes, fast=a.fast)
     if a.undo:
@@ -613,6 +631,10 @@ def _setup(a, ui: Ui, places: Places) -> int:
     ui.section("Summary")
     for k, v in summary:
         ui.row(k, v)
+    if "rat" in roles and a.no_service:
+        ui.line()
+        ui.note(f"With --no-service nothing starts the rat, and the nest adopts it only if it answers. Start it "
+                f"with: labrat rat --config {ui.fit(places.config('rat'), 200)}, before the code is approved.")
     if a.dry_run:
         ui.line()
         ui.line(f"{ui.dim}Dry run: nothing was written, joined or started.{ui.reset}")
