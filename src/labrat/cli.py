@@ -220,9 +220,10 @@ def cmd_job(a):
         raise LabratError("bad_request", f"labrat job {a.action} needs {'a script' if a.action == 'run' else 'a job number'}")
     if a.action == "run":
         env = dict(e.split("=", 1) for e in a.env or [])
+        stores = dict(x.split("=", 1) for x in a.store or [])
         j = client.run_job(a.target, a.files, a.rest, installed=a.installed, on=a.on.split(",") if a.on else None, nodes=a.nodes,
                            cpus=a.cpus, memory_gb=a.memory, gpus=a.gpus, gpu_memory_gb=a.gpu_memory, exclusive=a.exclusive,
-                           devices=a.device or [], env=env, minutes=a.minutes, name=a.name)
+                           devices=a.device or [], env=env, minutes=a.minutes, name=a.name, output=a.output, stores=stores or None)
         if a.json:
             return _show(j)
         print(f"job {st.bold(str(j['id']))} ({j['name']}) {j['status']}"
@@ -947,6 +948,8 @@ def main(argv=None) -> int:
                (("--device",), {"action": "append", "help": "a device the job may change"}),
                (("--env",), {"action": "append", "metavar": "NAME=VALUE"}), (("--minutes",), {"type": float, "help": "time limit"}),
                (("--name",), {}), (("--installed",), {"action": "store_true", "help": "a script already in the worker's scripts folder"}),
+               (("--output", "-o"), {"help": "where what it prints goes, as store:path with %%j %%x %%u %%N %%t"}),
+               (("--store",), {"action": "append", "metavar": "PURPOSE=STORE[:PATH]", "help": "where one kind of result goes"}),
                (("--rank",), {"type": int, "default": 0}), (("--follow", "-f"), {"action": "store_true"}),
                (("--person",), {"help": "another person's jobs (admins), or * for everyone's"}), js)
     client_cmd("jobs", "your jobs, newest first", lambda a: cmd_job(argparse.Namespace(**vars(a), action="list")),

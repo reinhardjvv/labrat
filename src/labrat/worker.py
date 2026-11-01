@@ -366,6 +366,8 @@ class Part:
         self._thread = threading.Thread(target=self.run, name=f"labrat-job-{self.job}-{self.rank}", daemon=True)
         self._lines: list[str] = []
         self._lines_lock = threading.Lock()
+        self.folders: dict[str, Path] = {}
+        self._out = None
 
     def start(self) -> None:
         self._thread.start()
@@ -421,7 +423,135 @@ class Part:
         devices = self.gpus()
         if devices is not None:
             env["CUDA_VISIBLE_DEVICES"] = ",".join(map(str, devices))
+        for purpose, folder in self.folders.items():
+            env[f"LABRAT_STORE_{purpose.upper()}"] = str(folder)
         return env
+
+    # -- where results go -----------------------------------------------------------------------------------
+    def _root(self, store: str) -> Path:
+        s = self.w.cfg["stores"].get(store)
+        if s is None:
+            raise LabratError("not_found", f"{self.w.name} has no store {store!r} in its worker.toml")
+        if s.get("mount") and not os.path.ismount(Path(str(s["mount"])).expanduser()):
+            raise LabratError("unavailable", f"store {store}: {s['mount']} is not mounted")
+        root = Path(str(s["path"])).expanduser().resolve()
+        if not root.is_dir():
+            raise LabratError("unavailable", f"store {store}: {root} is not there")
+        return root
+
+    def _inside(self, root: Path, rel: str) -> Path:
+        target = (root / rel).resolve()
+        if not target.is_relative_to(root):
+            raise LabratError("forbidden", f"{rel} leads outside the store")
+        return target
+
+    def _expand(self, pattern: str) -> str:
+        from .jobs import expand
+        return expand(pattern, self.job, str(self.p["name"]), str(self.p["person"]), self.w.name, self.rank)
+
+    def stores(self) -> None:
+        """Make this part's folders on the stores, as this computer mounts them. A folder another job left files in
+        is never written into: the job's number in the path (%j, the default) keeps every job's results apart."""
+        for purpose, w in (self.p.get("stores") or {}).items():
+            root = self._root(w["store"])
+            if w.get("fixed"):                                      # an open experiment's own folder
+                folder = self._inside(root, w["path"])
+                folder.mkdir(parents=True, exist_ok=True)
+            else:
+                folder = self._inside(root, self._expand(w["path"]))
+                folder.mkdir(parents=True, exist_ok=True)
+                marker = folder / ".labrat-job"
+                mine = folder / f".labrat-job.{self.w.name}.{self.rank}"
+                try:
+                    if any(not x.name.startswith(".labrat-job") for x in folder.iterdir()) and not marker.exists():
+                        raise FileExistsError
+                    mine.write_text(f"{self.job}\n")
+                    os.link(mine, marker)                          # appears whole, or not at all if another part was first
+                except FileExistsError:
+                    if not marker.is_file() or marker.read_text().strip() != str(self.job):
+                        raise LabratError("bad_request", f"{w['store']}:{folder.relative_to(root)} already holds another job's "
+                                          "files; put %j in the path") from None
+                finally:
+                    mine.unlink(missing_ok=True)
+            self.folders[purpose] = folder
+        out = self.p.get("output")
+        if out:
+            root = self._root(out["store"])
+            rel = self._expand(out["path"])
+            if int(self.p["world_size"]) > 1 and "%t" not in out["path"]:
+                rel += f".{self.rank}"
+            path = self._inside(root, rel)
+        elif "data" in self.folders:
+            path = self.folders["data"] / ("output.txt" if int(self.p["world_size"]) == 1 else f"output-{self.rank}.txt")
+        else:
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            self._out = os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644), "w", encoding="utf-8")
+        except FileExistsError:
+            raise LabratError("bad_request", f"{path.name} exists already; LABRAT never writes over a file") from None
+
+    def manifest(self) -> dict:
+        """Every file in this part's folders: its path, size and, with hash = true, its SHA-256."""
+        import hashlib
+        out = {}
+        for purpose, folder in self.folders.items():
+            w = self.p["stores"][purpose]
+            files, more = [], False
+            for f in sorted(folder.rglob("*")):
+                if not f.is_file() or f.name.startswith(".labrat-job"):
+                    continue
+                if len(files) >= 10000:
+                    more = True
+                    break
+                e = {"path": str(f.relative_to(folder)), "size": f.stat().st_size}
+                if self.w.cfg["hash"]:
+                    h = hashlib.sha256()
+                    with open(f, "rb") as fh:
+                        while chunk := fh.read(1 << 20):
+                            h.update(chunk)
+                    e["sha256"] = h.hexdigest()
+                files.append(e)
+            out[purpose] = {"store": w["store"], "folder": str(folder.relative_to(self._root(w["store"]))), "files": files,
+                            **({"more": True} if more else {})}
+        return out
+
+    def finish_stores(self, code: int | None, error: str | None) -> tuple[dict, str | None]:
+        """The manifest, the job's record beside its results, and each store's copy command. Returns the manifest
+        and what went wrong, if anything."""
+        import shlex
+        problems = []
+        if self._out is not None:
+            self._out.close()
+            self._out = None
+        try:
+            manifest = self.manifest()
+        except (OSError, LabratError) as e:
+            return {}, f"listing the results: {getattr(e, 'message', e)}"
+        if self.rank == 0 and "data" in self.folders:
+            record = {"job": self.job, "name": self.p["name"], "person": self.p["person"], "by": self.p["by"],
+                      "worker": self.w.name, "script": self.p["script"], "args": self.p.get("args", []),
+                      "needs": self.p.get("needs", {}), "exit_code": code, **({"error": error} if error else {}),
+                      "ended": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "files": manifest}
+            try:
+                (self.folders["data"] / f"job-{self.job}.json").write_text(json.dumps(record, indent=2) + "\n")
+            except OSError as e:
+                problems.append(f"writing job-{self.job}.json: {e}")
+        for purpose, folder in self.folders.items():
+            w = self.p["stores"][purpose]
+            copy = self.w.cfg["stores"][w["store"]].get("copy")
+            if not copy:
+                continue
+            from .batch import fill
+            rel = str(folder.relative_to(self._root(w["store"])))
+            args = [fill(a, {"src": str(folder), "rel": rel, "store": w["store"]}) for a in shlex.split(copy)]
+            try:
+                r = subprocess.run(args, capture_output=True, text=True, timeout=24 * 3600)
+                if r.returncode:
+                    problems.append(f"copying {purpose} failed: {(r.stderr or r.stdout).strip()[:300]}")
+            except (OSError, subprocess.SubprocessError) as e:
+                problems.append(f"copying {purpose} failed: {e}")
+        return manifest, "; ".join(problems) or None
 
     def gpus(self) -> list[int] | None:
         """The GPUs this part may use: as many free ones as it asked for, within the owner's limit."""
@@ -451,6 +581,7 @@ class Part:
             if self.dir.exists():
                 shutil.rmtree(self.dir)
             (self.dir / "tmp").mkdir(parents=True, mode=0o700)
+            self.stores()
             code, error = self.execute()
         except LabratError as e:
             error = e.message
@@ -458,9 +589,14 @@ class Part:
             error = f"could not start it: {e}"
         finally:
             self._flush()
+            manifest = None
+            if self.folders or self._out is not None:
+                manifest, problem = self.finish_stores(code, error)
+                if problem:
+                    error = f"{error}; {problem}" if error else problem
             for _ in range(5):
                 try:
-                    self._send("done", code=code, **({"error": error} if error else {}))
+                    self._send("done", code=code, **({"error": error} if error else {}), **({"manifest": manifest} if manifest else {}))
                     break
                 except LabratError:
                     time.sleep(2)
@@ -492,6 +628,12 @@ class Part:
             text, self._lines = "\n".join(self._lines), []
         if not text:
             return False
+        if self._out is not None:
+            try:
+                self._out.write(text + "\n")
+                self._out.flush()
+            except OSError:
+                pass
         try:
             return bool(self._send("output", text=text).get("stop"))
         except LabratError:

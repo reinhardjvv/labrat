@@ -209,12 +209,16 @@ class Client:
     def run_job(self, script: str | os.PathLike, files: list | tuple = (), args: list | tuple = (), *, installed: bool = False,
                 on: list | None = None, nodes: int | None = None, cpus: int | None = None, memory_gb: float | None = None,
                 gpus: int | None = None, gpu_memory_gb: float | None = None, exclusive: bool = False, devices: list | tuple = (),
-                env: dict | None = None, minutes: float | None = None, name: str | None = None) -> dict:
+                env: dict | None = None, minutes: float | None = None, name: str | None = None, output: str | None = None,
+                stores: dict | None = None) -> dict:
         """Start a job: a script on this computer, sent with the files named, or with installed=True the name of a script
         already in the worker's scripts folder. It waits in the queue until workers that fit are free:
 
-            job = lab.run_job("fit.py", ["model.py"], ["--steps", "40"], gpus=1)
+            job = lab.run_job("fit.py", ["model.py"], ["--steps", "40"], gpus=1, stores={"raw": "nas-raw"})
             lab.job_output(job["id"])
+
+        stores maps a purpose to 'store' or 'store:path', and output is 'store:path' for what the job prints, with
+        Slurm's codes in paths: %j job, %x name, %u person, %N worker, %t rank.
         """
         import base64
         from pathlib import Path
@@ -228,7 +232,7 @@ class Client:
                                    ("gpu_memory_gb", gpu_memory_gb)) if v is not None}
         spec = {"script": script_name, "files": sent, "args": [str(a) for a in args], "on": list(on or []), "needs": needs,
                 "exclusive": exclusive, "devices": list(devices), "env": dict(env or {}),
-                **{k: v for k, v in (("minutes", minutes), ("name", name)) if v is not None}}
+                **{k: v for k, v in (("minutes", minutes), ("name", name), ("output", output), ("stores", stores)) if v is not None}}
         return self.request("job", args={"action": "submit", "spec": spec})
 
     def jobs(self, person: str | None = None) -> list[dict]:

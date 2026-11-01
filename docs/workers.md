@@ -67,6 +67,8 @@ labrat job stop 12
 | `--env NAME=VALUE` | an environment variable for the script |
 | `--minutes` | the time limit, after which the job is stopped |
 | `--name` | a name for the job (by default the script's) |
+| `--store PURPOSE=STORE[:PATH]` | where one kind of result goes ([below](#where-results-go)) |
+| `--output STORE:PATH` | where what the job prints goes |
 
 A `.py` script runs with the worker's Python, a `.sh` script with `/bin/sh`. At most 16 MB of files travel with a
 job. From Python, `Client().run_job("fit.py", ["model.py"], ["--steps", "40"], gpus=1)` does the same, and an AI
@@ -110,6 +112,62 @@ Each part runs with a token of its own, which the nest and the worker both deriv
 never travels. It acts as the person who sent the job, with their limits, locks and approval rules, but changes
 only the devices the job names with `--device`. It cannot start other jobs, recordings, people, workers or
 approvals, and it stops working when the part ends. The audit log records the person with the job's number.
+
+### Where results go
+
+A job writes its results straight to the lab's stores, through the worker's own mounts: a NAS over NFS or SMB,
+a cluster's scratch space, a local disk. None of the data passes through the nest, so a job writes as fast as the
+link between the worker and the store allows. Each kind of result can go to a different store:
+
+```toml
+# nest.toml
+[jobs]
+stores = { data = "nas", raw = "nas-raw" }     # purpose = store; data is the default purpose
+path = "%u/%x-%j"                              # each job's folder on a store (the default)
+
+[jobs.people.ada]
+stores = { raw = "ada-scratch" }               # ada's raw data goes elsewhere
+```
+
+```toml
+# worker.toml: where those stores are on this computer
+[stores.nas]
+path = "/mnt/labnas/labrat"
+mount = "/mnt/labnas"                          # only while this is mounted
+[stores.nas-raw]
+path = "/mnt/raw/labrat"
+```
+
+```python
+from labrat import job
+(job.path("raw") / "frames.bin").write_bytes(frames)     # /mnt/raw/labrat/ada/sweep-12/frames.bin
+(job.path() / "fit.csv").write_text(table)               # the data folder
+```
+
+A job chooses for itself, like Slurm's `--output`, with the same codes in paths: `%j` the job's number, `%x` its
+name, `%u` the person, `%N` the worker, `%t` the rank, `%%` a percent sign.
+
+```bash
+labrat job run sweep.py --store raw=nas-raw:%u/runs/%x/%j --output nas:logs/%x-%j.out
+```
+
+The job's choice comes first, then the person's (`[jobs.people.<person>]`), then the lab's (`[jobs]`), and a lab
+with experiments uses the experiments' store for `data` when `[jobs]` names none. A job started while its
+person has an experiment open writes its `data` into that experiment's folder.
+
+- What the job prints goes to `output.txt` in its data folder (`output-<rank>.txt` for each part of a group), or
+  to the file `--output` names, as well as to `labrat job output`.
+- When the job ends, the worker lists every file it wrote with its size (and SHA-256 with `hash = true`), sends
+  the list to the nest, where `labrat job show` displays it, and writes `job-<number>.json` beside the results.
+- Paths stay inside their store: absolute paths and `..` are refused, and the worker checks where each path
+  really leads. A folder that already holds another job's files is never written into, and an output file is
+  never written over. Keep `%j` in the path, as the default does.
+- A job goes only to workers that have every store it needs, mounted.
+- On a cluster whose compute nodes cannot see the NAS, point the store at scratch space and let the worker copy
+  each job's results on when it ends: `copy = "rsync -a {src}/ nas-host:/export/labrat/{rel}/"`, where `{src}` is
+  the job's folder on this computer and `{rel}` its path inside the store. A failed copy marks the job failed.
+- Store credentials stay in the computer's own mount set-up (`/etc/fstab`, autofs, a Kerberos keytab). The nest
+  never holds or sends them, and never learns where a store is mounted.
 
 ### Stopping
 
@@ -209,7 +267,7 @@ error. Every setting is optional except `nest`, which `labrat worker join --url`
 | `pass_env` | none | environment variables a job inherits, such as `["CUDA_HOME"]` |
 | `allow_http` | `false` | allow plain HTTP to a nest on a public address |
 | `hash` | `false` | add a SHA-256 of every output file to the job's record |
-| `[stores.<name>]` | none | where the lab's stores are on this computer |
+| `[stores.<name>]` | none | where the lab's stores are on this computer: `path`, and optionally `mount` and `copy` |
 
 ## Security
 

@@ -41,6 +41,9 @@ ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 RESERVED_ENV = {"PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "MASTER_ADDR", "MASTER_PORT", "RANK", "WORLD_SIZE",
                 "LOCAL_RANK", "CUDA_VISIBLE_DEVICES", "PYTHONPATH", "LD_PRELOAD", "LD_LIBRARY_PATH"}
 ENDED = ("done", "failed", "stopped", "cancelled")
+PURPOSE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
+PATTERN_CODES = set("jxuNt%")          # Slurm's: job id, job name, user (the person), node (the worker), task (the rank)
+DEFAULT_PATH = "%u/%x-%j"
 LOST_S = 30                         # a part its worker no longer reports for this long has been lost
 
 
@@ -55,7 +58,7 @@ def part_token(key: str, job: int, rank: int) -> str:
 
 def check_spec(spec: dict, devices_exist) -> dict:
     """A job's specification, checked and with only the fields LABRAT knows."""
-    known = {"name", "script", "files", "args", "on", "needs", "exclusive", "devices", "env", "minutes"}
+    known = {"name", "script", "files", "args", "on", "needs", "exclusive", "devices", "env", "minutes", "stores", "output"}
     unknown = set(spec) - known
     if unknown:
         raise LabratError("bad_request", f"unknown job setting(s) {', '.join(sorted(unknown))}")
@@ -112,12 +115,58 @@ def check_spec(spec: dict, devices_exist) -> dict:
     check_name(out["name"], "job")
     if minutes is not None:
         out["minutes"] = float(minutes)
+    stores = spec.get("stores") or {}
+    if not isinstance(stores, dict) or not all(PURPOSE.match(str(k)) for k in stores):
+        raise LabratError("bad_request", "stores maps purposes (data, raw, results: lower case) to store or store:path")
+    out["stores"] = {k: where(str(v), k) for k, v in stores.items()}
+    if spec.get("output"):
+        out["output"] = where(str(spec["output"]), "output", store_optional=True)
     return out
 
 
+def check_pattern(path: str, what: str) -> str:
+    """A folder or file pattern inside a store: relative, no '..', and only Slurm's codes %j %x %u %N %t %%."""
+    pure = PurePosixPath(path)
+    if not path or pure.is_absolute() or ".." in pure.parts or "\\" in path:
+        raise LabratError("bad_request", f"{what} {path!r}: a path inside the store, with no '..'")
+    codes = re.findall(r"%(.)", path.replace("%%", ""))
+    if set(codes) - PATTERN_CODES:
+        raise LabratError("bad_request", f"{what} {path!r}: the codes are %j (job), %x (name), %u (person), %N (worker), %t (rank) and %%")
+    return path
+
+
+def where(text: str, purpose: str, store_optional: bool = False) -> dict:
+    """'store' or 'store:path' (or, for output, just 'path' on the data store) as {store, path}."""
+    store, sep, path = text.partition(":")
+    if not sep and store_optional and ("/" in store or "%" in store or "." in store):
+        store, path = "", store
+    if store:
+        check_name(store, "store")
+    return {"store": store, "path": check_pattern(path, purpose) if path else ""}
+
+
+def expand(pattern: str, job: int, name: str, person: str, worker: str, rank: int) -> str:
+    codes = {"j": str(job), "x": name, "u": person, "N": worker, "t": str(rank), "%": "%"}
+    return re.sub(r"%(.)", lambda m: codes.get(m.group(1), m.group(0)), pattern)
+
+
 class Jobs:
-    def __init__(self, hub, workers, state: Path):
+    def __init__(self, hub, workers, state: Path, cfg: dict | None = None, experiment_store: str | None = None):
         self.hub, self.workers = hub, workers
+        cfg = cfg or {}
+        if not isinstance(cfg, dict) or set(cfg) - {"stores", "path", "people"}:
+            raise LabratError("bad_request", "[jobs] takes stores, path and people")
+        self.stores = dict(cfg.get("stores") or ({"data": experiment_store} if experiment_store else {}))
+        self.path = check_pattern(str(cfg.get("path", DEFAULT_PATH)), "[jobs] path")
+        self.people = {}
+        for person, p in (cfg.get("people") or {}).items():
+            if not isinstance(p, dict) or set(p) - {"stores"}:
+                raise LabratError("bad_request", f"[jobs.people.{person}] takes stores")
+            self.people[person] = dict(p.get("stores") or {})
+        for purpose, store in [*self.stores.items(), *(i for p in self.people.values() for i in p.items())]:
+            if not PURPOSE.match(purpose):
+                raise LabratError("bad_request", f"[jobs] store purpose {purpose!r}: lower case letters, digits and _")
+            check_name(str(store), "store")
         self.dir = state / "jobs"
         self.jobs: dict[int, dict] = {}
         self._lock = workers._lock                  # one lock for workers and jobs, so placement sees both at once
@@ -201,9 +250,38 @@ class Jobs:
             raise LabratError("forbidden", f"job {j['id']} is {j['person']}'s")
         return j
 
+    def resolve_stores(self, spec: dict, person: str) -> None:
+        """Where each kind of result goes: the job's own choice, then the person's, then the lab's. Results of a job
+        started inside an open experiment go into the experiment's folder unless the job says otherwise."""
+        chosen = {k: {"store": v, "path": self.path} for k, v in {**self.stores, **self.people.get(person, {})}.items()}
+        exp = self.hub.experiments.active.get(person) if self.hub.experiments is not None else None
+        if exp is not None:
+            chosen["data"] = {"store": exp.store, "path": exp.folder, "fixed": True, "experiment": exp.name}
+        for purpose, w in spec["stores"].items():
+            base = chosen.get(purpose) or chosen.get("data") or {}
+            store = w["store"] or base.get("store")
+            if not store:
+                raise LabratError("bad_request", f"stores.{purpose} names no store, and the lab has no store for {purpose}")
+            chosen[purpose] = {"store": store, "path": w["path"] or self.path}
+        if spec.get("output"):
+            o = spec["output"]
+            store = o["store"] or (chosen.get("data") or {}).get("store")
+            if not store:
+                raise LabratError("bad_request", "output names no store, and the job has no data store")
+            spec["output"] = {"store": store, "path": o["path"] or f"{self.path}.out"}
+        spec["stores"] = chosen
+
     def submit(self, spec: dict, who: Principal) -> dict:
         spec = check_spec(spec, self.hub.exists)
         person = who.person
+        self.resolve_stores(spec, person)
+        needed = {w["store"] for w in [*spec["stores"].values(), *([spec["output"]] if spec.get("output") else [])]}
+        reachable = {s["name"] for n in self.workers.entries if self.workers.allows(n, person)
+                     for s in self.workers.report(n).get("stores", [])}
+        missing = sorted(needed - reachable) if spec["stores"] or spec.get("output") else []
+        if missing and self.workers.live:
+            raise LabratError("not_found", f"none of the workers that take {person}'s jobs has store {', '.join(missing)} "
+                              "(add it under [stores] in their worker.toml)")
         for w in spec["on"]:
             if w not in self.workers.entries:
                 raise LabratError("not_found", f"no worker {w!r}")
@@ -270,6 +348,9 @@ class Jobs:
         spec = j["spec"]
         if spec["files"] and r.get("accept") == "scripts":
             return False
+        have = {st["name"] for st in r.get("stores", []) if st.get("available")}
+        if any(w["store"] not in have for w in [*spec["stores"].values(), *([spec["output"]] if spec.get("output") else [])]):
+            return False
         if r.get("backend", "local") != "local":                # a scheduler there decides what fits
             return True
         needs, limits = spec["needs"], r.get("limits", {})
@@ -332,7 +413,8 @@ class Jobs:
         return {"job": j["id"], "rank": part["rank"], "world_size": spec["needs"]["nodes"], "name": j["name"], "person": j["person"],
                 "by": j["by"], "script": spec["script"], "files": spec["files"], "args": spec["args"], "env": spec["env"],
                 "needs": spec["needs"], "exclusive": spec["exclusive"], "devices": spec["devices"], "leader": j["leader"],
-                "port": j["port"], **({"minutes": spec["minutes"]} if "minutes" in spec else {})}
+                "port": j["port"], "stores": spec["stores"], **({"minutes": spec["minutes"]} if "minutes" in spec else {}),
+                **({"output": spec["output"]} if spec.get("output") else {})}
 
     # -- the worker's side ----------------------------------------------------------------------------------
     def next_for(self, worker: str, wait: float, running: list) -> dict:
@@ -395,7 +477,7 @@ class Jobs:
         if part["status"] in ENDED:
             return
         stopped = j.get("stop")
-        part.update(status="stopped" if stopped else "done" if code == 0 else "failed", ended=_now(), exit_code=code)
+        part.update(status="stopped" if stopped else "done" if code == 0 and not error else "failed", ended=_now(), exit_code=code)
         if error:
             part["error"] = error[:2000]
         if isinstance(manifest, dict):

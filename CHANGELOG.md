@@ -24,6 +24,11 @@ All notable changes to LABRAT are recorded here. The format follows
   account, extra options, setup lines, a container, a template and every command configurable. A job for several
   nodes becomes one allocation with `srun` giving each task its rank. `backend = "batch"` drives another
   scheduler from a template and four commands.
+- Job results go straight from the worker to the lab's stores through its own mounts. `[jobs]` and
+  `[jobs.people.<person>]` give each purpose (`data`, `raw`, ...) a store, `--store` and `--output` choose per
+  job with Slurm's `%j %x %u %N %t`, and `labrat.job.path(purpose)` finds the folder. Workers list every file
+  they wrote for the nest, write `job-<n>.json` beside the results, never write into another job's folder, and
+  can copy results on with a store's `copy` command.
 - The audit log keeps long values, such as frames sent to a display, as their size and SHA-256.
 
 ## [0.2.0] - 2026-10-30

@@ -103,14 +103,15 @@ TOOLS = [
      {}, [], "workers"),
     ("labrat_job", "Jobs on the lab's workers. action list (the person's jobs), status, output (what a part printed, from line "
      "since) or stop, with id; or submit with script (a file name), code (its text), args, and what it needs: on (worker names), "
-     "nodes, cpus, memory_gb, gpus, gpu_memory_gb, exclusive, devices it may change, minutes (time limit). A job runs as the "
+     "nodes, cpus, memory_gb, gpus, gpu_memory_gb, exclusive, devices it may change, minutes (time limit), stores (purpose to "
+     "'store' or 'store:path', read in the script with labrat.job.path(purpose)). A job runs as the "
      "person, may change only the devices it names, and waits in the queue until workers that fit are free.",
      {"action": {"type": "string", "enum": ["list", "status", "output", "stop", "submit"]}, "id": {"type": "integer"},
       "script": {"type": "string"}, "code": {"type": "string"}, "args": {"type": "array", "items": {"type": "string"}},
       "on": {"type": "array", "items": {"type": "string"}}, "nodes": {"type": "integer"}, "cpus": {"type": "integer"},
       "memory_gb": {"type": "number"}, "gpus": {"type": "integer"}, "gpu_memory_gb": {"type": "number"},
       "exclusive": {"type": "boolean"}, "devices": {"type": "array", "items": {"type": "string"}}, "minutes": {"type": "number"},
-      "rank": {"type": "integer"}, "since": {"type": "integer"}}, ["action"], "job"),
+      "stores": {"type": "object"}, "rank": {"type": "integer"}, "since": {"type": "integer"}}, ["action"], "job"),
     ("labrat_approval", "The state of a request that waits for a person: pending, approved (with its result), denied, failed or expired.",
      {"id": {"type": "string", "description": "the approval id from a 'pending' reply"}}, ["id"], "approval"),
 ]
@@ -183,7 +184,8 @@ def _job_tool(client: Client, args: dict):
         spec = {"script": script, "files": {script: base64.b64encode(str(args.get("code", "")).encode()).decode()} if args.get("code") else {},
                 "args": [str(a) for a in args.get("args") or []], "on": list(args.get("on") or []), "needs": needs,
                 "exclusive": bool(args.get("exclusive")), "devices": list(args.get("devices") or []),
-                **({"minutes": args["minutes"]} if args.get("minutes") else {})}
+                **({"minutes": args["minutes"]} if args.get("minutes") else {}),
+                **({"stores": args["stores"]} if args.get("stores") else {})}
         return client.request("job", args={"action": "submit", "spec": spec})
     if args.get("id") is None:
         raise LabratError("bad_request", f"{action} needs the job's id")

@@ -120,7 +120,7 @@ class Nest(Hub):
         from .jobs import Jobs
         from .workers import Workers
         self.workers = Workers(self, state / "workers.json")
-        self.jobs = Jobs(self, self.workers, state)
+        self.jobs = Jobs(self, self.workers, state, cfg.get("jobs") or {}, (cfg.get("experiments") or {}).get("store"))
         self.limits: dict = cfg.get("limits") or {}
         for dev_id, attrs in self.limits.items():
             if "/" not in dev_id and dev_id not in self.devices:

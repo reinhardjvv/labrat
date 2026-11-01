@@ -19,6 +19,7 @@ file. Unknown settings are an error, so a typing mistake stops the server with a
 | `[[tokens]]` | none | who may connect, below |
 | `[devices.<name>]` | none | the devices served, below |
 | `[network]` | none | a private network for the instruments and rats ([network](network.md)) |
+| `[jobs]` | none | where jobs on the workers write their results, nest only ([workers](workers.md#where-results-go)) |
 
 ## Nest settings
 
@@ -100,6 +101,12 @@ See [recordings.md](recordings.md).
 
 `[experiments]` with `store = "<store>"` gives every person a folder of experiments on that store
 (nest only). See [experiments.md](experiments.md).
+
+## Jobs
+
+`[jobs]` says where jobs write their results: `stores`, a purpose for each store (`data` is the default), `path`,
+each job's folder with Slurm's codes (`"%u/%x-%j"` by default), and `[jobs.people.<person>]` with `stores` of
+their own. See [workers](workers.md#where-results-go).
 
 ## Approvals
 
