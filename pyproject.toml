@@ -57,6 +57,7 @@ labrat = ["py.typed", "profiles/*/*.toml"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+faulthandler_timeout = 120     # a test that hangs prints every thread's stack instead of stalling silently
 
 [tool.ruff]
 line-length = 130
