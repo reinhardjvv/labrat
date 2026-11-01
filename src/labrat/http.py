@@ -8,8 +8,9 @@
                                      a device's stream (camera video, live readings), sent as it comes
     GET  /api/v1/files/<path>[?person=<person>]
                                      a file from your own experiments, whole (admins may name another person)
+    POST /api/v1/worker              a worker's signed request for work (nest only, workers.py)
 
-Every route but health needs 'Authorization: Bearer <token>'.
+Every route but health and worker needs 'Authorization: Bearer <token>'. A worker signs each request instead.
 """
 from __future__ import annotations
 
@@ -65,8 +66,9 @@ def make_handler(hub: Hub):
         def do_GET(self):
             path = self.path.split("?")[0].rstrip("/")
             if path == "/api/v1/health":
-                challenge = (parse_qs(urlsplit(self.path).query).get("challenge") or [None])[-1]
-                return self._send(200, {"ok": True, "value": hub.health(challenge[:128] if challenge else None)})
+                q = parse_qs(urlsplit(self.path).query)
+                challenge, lease = (q.get("challenge") or [None])[-1], (q.get("lease") or [None])[-1]
+                return self._send(200, {"ok": True, "value": hub.health(challenge[:128] if challenge else None, lease[:64] if lease else None)})
             try:
                 who = hub.authenticate(self.headers.get("Authorization"))
             except LabratError as e:
@@ -143,8 +145,40 @@ def make_handler(hub: Hub):
             finally:
                 streams.release()
 
+        def _worker(self) -> None:
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                length = -1
+            if not 0 <= length <= MAX_BODY:
+                return self._send(400, fail(LabratError("bad_request", f"send a JSON body of at most {MAX_BODY} bytes")))
+            status, data, signature = hub.worker_request(self.headers.get("Authorization"), self.rfile.read(length))
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            if signature:
+                self.send_header("X-Labrat-Signature", signature)
+            self.end_headers()
+            self.wfile.write(data)
+
+        def _binary(self, body: bytes) -> dict:
+            """A message in the X-Labrat-Message header with one argument, named by X-Labrat-Data ('data' by
+            default), as the raw body: a frame for a display travels without base64."""
+            try:
+                obj = json.loads(self.headers.get("X-Labrat-Message") or "")
+            except ValueError:
+                raise LabratError("bad_request", "a binary body needs the message as JSON in X-Labrat-Message") from None
+            if not isinstance(obj, dict):
+                raise LabratError("bad_request", "X-Labrat-Message is a JSON object")
+            name = self.headers.get("X-Labrat-Data") or "data"
+            obj["args"] = {**(obj.get("args") if isinstance(obj.get("args"), dict) else {}), name: body}
+            return obj
+
         def do_POST(self):
             path = self.path.split("?")[0].rstrip("/")
+            if path == "/api/v1/worker":
+                return self._worker()
             try:
                 who = hub.authenticate(self.headers.get("Authorization"))
                 if path != "/api/v1/message":
@@ -155,10 +189,13 @@ def make_handler(hub: Hub):
                     raise LabratError("bad_request", "Content-Length is not a number") from None
                 if not 0 < length <= MAX_BODY:
                     raise LabratError("bad_request", f"send a JSON body of at most {MAX_BODY} bytes")
-                try:
-                    obj = json.loads(self.rfile.read(length))
-                except ValueError:
-                    raise LabratError("bad_request", "the body is not valid JSON") from None
+                if self.headers.get("Content-Type", "").startswith("application/octet-stream"):
+                    obj = self._binary(self.rfile.read(length))
+                else:
+                    try:
+                        obj = json.loads(self.rfile.read(length))
+                    except ValueError:
+                        raise LabratError("bad_request", "the body is not valid JSON") from None
             except LabratError as e:
                 return self._send(e.status, fail(e))
             if isinstance(obj, list):

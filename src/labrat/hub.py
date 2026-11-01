@@ -18,6 +18,8 @@ from .message import LabratError, Message, fail, ok, parse, role_allows
 
 log = logging.getLogger("labrat")
 SECRET_ARGS = ("key", "password", "token", "secret")
+LONG = 1024                               # longer values (frames, files) go into the audit log as their size and hash
+JOB_REFUSED = {"adopt", "forget", "users", "device", "probe", "capture", "approve", "deny"}   # what a job's token may never do
 
 
 @dataclass(frozen=True)
@@ -28,6 +30,9 @@ class Principal:
     role: str
     for_: str | None = None
     god: bool = False                     # god mode: no lab limits or approvals; other people's locks still hold
+    job: int | None = None                # a part of this job runs with the token (jobs.py)
+    devices: tuple | None = None          # a job's token, or a lease, may change these devices only
+    lease: str | None = None              # the lease this request came with, at a rat (lease.py)
 
     @property
     def person(self) -> str:
@@ -43,6 +48,8 @@ class Rule:
     names: list
 
     def matches(self, m: Message, who: Principal) -> bool:
+        if m.op == "job" and m.args.get("action") != "submit":
+            return False                                      # only starting a job can wait for a person
         return (any(fnmatch(who.name, w) for w in self.who) and m.op in self.ops
                 and any(fnmatch(m.device or "", d) for d in self.devices) and any(fnmatch(m.name or "", n) for n in self.names))
 
@@ -52,8 +59,8 @@ class Rule:
         if unknown:
             raise LabratError("bad_request", f"[[approvals]]: unknown setting(s) {', '.join(sorted(unknown))}")
         ops = list(d.get("ops", ["set", "call"]))
-        if not set(ops) <= {"set", "call", "lock"}:
-            raise LabratError("bad_request", "[[approvals]] ops are set, call and lock")
+        if not set(ops) <= {"set", "call", "lock", "job"}:
+            raise LabratError("bad_request", "[[approvals]] ops are set, call, lock and job")
         return cls(list(d.get("who", ["*"])), ops, list(d.get("devices", ["*"])), list(d.get("names", ["*"])))
 
 
@@ -86,7 +93,10 @@ class Hub:
         self.last_change: dict[str, dict] = {}                        # device -> who changed it last, when and how
         self.users = None                                             # set by the nest: people added while it runs
         self.bench = None                                             # scan, probe, capture, profiles, devices added live
+        self.workers = None                                           # set by the nest: computers that run jobs
+        self.jobs = None                                              # set by the nest: the jobs they run
         self._ctx = threading.local()
+        self._streams: dict[tuple, dict] = {}                         # fast changes through a lease, counted (audit)
         if require_lock is True:
             self.require_lock = ["*"]
         elif isinstance(require_lock, list):
@@ -114,12 +124,16 @@ class Hub:
             msg = parse(obj)
             if not role_allows(who.role, msg.op):
                 raise LabratError("forbidden", f"{who.name} ({who.role}) may not {msg.op}")
+            if who.job is not None:
+                self.job_scope(msg, who)
             if not who.god and any(r.matches(msg, who) for r in self.rules):
                 return fail(self.ask_approval(msg, who), msg_id)
             reply = self.dispatch(msg, who)
             if msg.op in ("set", "call", "lock", "unlock", "stop", "adopt", "forget", "deny", "probe") or (
                     msg.op in ("device", "capture", "profile") and msg.args.get("action") in ("add", "remove", "start", "stop", "save")) or (
-                    msg.op == "users" and msg.args.get("action") in ("add", "remove")) or (
+                    msg.op in ("users", "workers") and msg.args.get("action") in ("add", "remove", "join", "share", "unshare")) or (
+                    msg.op == "job" and msg.args.get("action") in ("submit", "stop")) or (
+                    msg.op == "lease" and msg.args.get("action", "grant") in ("grant", "release")) or (
                     msg.op in ("record", "experiment") and msg.args.get("action") in ("start", "stop", "note")):
                 self.audit(who, msg, True)
             reply.setdefault("id", msg_id) if msg_id is not None else None
@@ -156,6 +170,14 @@ class Hub:
             if self.bench is None:
                 raise LabratError("not_found", f"this {self.role} has no workbench")
             return ok(self.bench.op(m, who))
+        if m.op == "job":
+            if self.jobs is None:
+                raise LabratError("not_found", f"jobs run at a nest; this is a {self.role}")
+            return ok(self.jobs.op(m, who))
+        if m.op == "workers":
+            if self.workers is None:
+                raise LabratError("not_found", f"workers join a nest; this is a {self.role}")
+            return ok(self.workers.op(m, who))
         if m.op == "users":
             if self.users is None:
                 raise LabratError("not_found", f"users are added at the nest; this is a {self.role}")
@@ -188,10 +210,24 @@ class Hub:
         """True when this request skips the lab's limits."""
         return who.god
 
+    def job_scope(self, m: Message, who: Principal) -> None:
+        """A job's token works as its person, but changes only the devices the job names and runs no other jobs,
+        recordings, people, workers or approvals."""
+        action = m.args.get("action")
+        if (m.op in JOB_REFUSED or (m.op == "workers" and action not in (None, "list", "show"))
+                or (m.op == "record" and action in ("start", "stop")) or (m.op == "job" and action == "submit")
+                or (m.op == "profile" and action in ("try", "save"))):
+            raise LabratError("forbidden", f"a job's token may not {m.op}{' ' + action if action else ''}")
+        if m.op in ("set", "call", "lock", "unlock") and m.device not in (who.devices or ()):
+            raise LabratError("forbidden", f"job {who.job} may change only the devices it names "
+                              f"({', '.join(who.devices) if who.devices else 'none'}), not {m.device}")
+
     def open_stream(self, device: str, name: str, channel: str | None, who: Principal):
         """(content type, iterator of bytes) for a device's stream. Anyone who may read may watch."""
         if not role_allows(who.role, "get"):
             raise LabratError("forbidden", f"{who.name} may not watch streams")
+        if who.lease is not None and device not in (who.devices or ()):
+            raise LabratError("forbidden", f"lease {who.lease} is for {', '.join(who.devices or ())}, not {device}")
         return self.device(device).open_stream(name, channel)
 
     def device(self, name: str) -> Device:
@@ -199,7 +235,7 @@ class Hub:
             raise LabratError("not_found", f"no device {name!r}; there is {', '.join(self.devices) or 'none'}")
         return self.devices[name]
 
-    def health(self, challenge: str | None = None) -> dict:
+    def health(self, challenge: str | None = None, lease: str | None = None) -> dict:
         return {"name": self.name, "role": self.role, "version": __version__, "uptime_s": round(time.time() - self.started)}
 
     def list_devices(self, args: dict | None = None) -> list[dict]:
@@ -337,7 +373,15 @@ class Hub:
         people = [{"name": n, "last_active": time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(t))}
                   for n, t in sorted(self.active_at.items(), key=lambda x: -x[1]) if n != "nest"]
         return {"devices": devices, "people": people,
-                **({"require_lock": self.require_lock} if self.require_lock else {})}
+                **({"require_lock": self.require_lock} if self.require_lock else {}),
+                **({"workers": self.workers.who()} if self.workers is not None and self.workers.entries else {})}
+
+    def worker_request(self, header: str | None, body: bytes) -> tuple[int, bytes, str | None]:
+        """A signed request from a worker (workers.py). Only a nest has workers."""
+        if self.workers is None:
+            err = LabratError("not_found", f"workers join a nest; this is a {self.role}")
+            return err.status, json.dumps(fail(err)).encode(), None
+        return self.workers.request(header, body)
 
     # -- approvals ------------------------------------------------------------------------------------------
     def ask_approval(self, m: Message, who: Principal) -> LabratError:
@@ -410,6 +454,7 @@ class Hub:
     def shutdown(self) -> dict:
         """The safe state for this server's own devices only. A nest that restarts leaves its rats as they are:
         their watchdogs act if it stays away."""
+        self.flush_streams()
         if self.recorder is not None:
             self.recorder.stop_all()
         if self.experiments is not None:
@@ -428,6 +473,44 @@ class Hub:
                 log.exception("closing %s", d.name)
 
     # -- audit ----------------------------------------------------------------------------------------------
+    def _counted(self, entry: dict) -> bool:
+        """Changes through a lease come fast, such as frames to a display. The first of each kind is logged in full;
+        the rest are counted, with a running SHA-256 over their values, and logged as one line every 10 s and when
+        the lease ends. A device with log = "every" has every change logged."""
+        dev = self.devices.get(entry.get("device") or "")
+        if dev is None or dev.config.get("log", "stream") == "every":
+            return False
+        key = (entry["lease"], entry["op"], entry["device"], entry.get("name"), entry.get("channel"))
+        value = json.dumps([entry.get("value"), entry.get("args")], sort_keys=True, default=str).encode()
+        with self._audit:
+            s = self._streams.get(key)
+            if s is None:
+                self._streams[key] = {"entry": entry, "count": 0, "since": time.monotonic(), "digest": ""}
+                return False
+            s["count"] += 1
+            s["digest"] = hashlib.sha256(s["digest"].encode() + value).hexdigest()
+            s.setdefault("from", entry["time"])
+            s["to"] = entry["time"]
+        return True
+
+    def flush_streams(self, lease: str | None = None, older_than: float = 0.0) -> None:
+        """Write the counted changes of one lease, or of every lease whose count is older than older_than seconds."""
+        now = time.monotonic()
+        written = []
+        with self._audit:
+            for k in [k for k, st in self._streams.items() if (lease is None or k[0] == lease) and now - st["since"] >= older_than]:
+                st = self._streams.pop(k) if lease is not None else self._streams[k]
+                if st["count"]:
+                    written.append(dict(st))
+                if lease is None:
+                    st.update(count=0, since=now, digest="")
+                    st.pop("from", None)
+        for s in written:
+            e = s["entry"]
+            self._write_audit(None, {**{x: e[x] for x in ("who", "role", "for", "job", "lease", "op", "device", "name", "channel") if x in e},
+                                     "time": s["to"], "count": s["count"], "from": s["from"], "to": s["to"],
+                                     "sha256": s["digest"], "ok": True})
+
     def audit(self, who: Principal, msg: Any, success: bool, err: LabratError | None = None) -> None:
         if self.audit_path is None:
             return
@@ -438,12 +521,22 @@ class Hub:
         if m.get("op") == "users":
             m.pop("value", None)
         if isinstance(m.get("args"), dict):
-            m["args"] = {k: ("<hidden>" if any(s in k.lower() for s in SECRET_ARGS) else v) for k, v in m["args"].items()}
+            m["args"] = {k: ("<hidden>" if any(s in k.lower() for s in SECRET_ARGS) else _short(v)) for k, v in m["args"].items()}
+        if "value" in m:
+            m["value"] = _short(m["value"])
         entry = {"time": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "who": who.name, "role": who.role,
-                 **({"for": who.for_} if who.for_ else {}), **({"god": True} if who.god else {}), **m, "ok": success}
+                 **({"for": who.for_} if who.for_ else {}), **({"god": True} if who.god else {}),
+                 **({"job": who.job} if who.job is not None else {}), **m, "ok": success}
         if err is not None:
             entry["error"] = err.code
-        if self.experiments is not None:
+        if who.lease is not None:
+            entry["lease"] = who.lease
+            if entry.get("op") in ("set", "call") and success and self._counted(entry):
+                return
+        self._write_audit(who, entry)
+
+    def _write_audit(self, who: Principal | None, entry: dict) -> None:
+        if self.experiments is not None and who is not None:
             self.experiments.log(who, entry)
         self._note(entry)
         line = json.dumps(entry, default=str)
@@ -454,3 +547,15 @@ class Hub:
                     f.write(line + "\n")
         except OSError as e:                                  # the change happened: say so, and say the log failed
             log.error("cannot write the audit log %s: %s", self.audit_path, e)
+
+
+def _short(v, depth: int = 0):
+    """A value for the audit log: long text or bytes (a frame, a file) as their size and SHA-256."""
+    if isinstance(v, (bytes, bytearray)) or (isinstance(v, str) and len(v) > LONG):
+        data = v.encode() if isinstance(v, str) else bytes(v)
+        return {"bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+    if isinstance(v, dict) and depth < 3:
+        return {k: _short(x, depth + 1) for k, x in v.items()}
+    if isinstance(v, list) and depth < 3:
+        return [_short(x, depth + 1) for x in v[:1000]]
+    return v

@@ -1,6 +1,7 @@
 # Configuration
 
-A nest reads `nest.toml` and a rat reads `rat.toml`, both in [TOML](https://toml.io). Without `--config`, each
+A nest reads `nest.toml` and a rat reads `rat.toml`, both in [TOML](https://toml.io). A worker reads
+`worker.toml` ([workers](workers.md#workertoml)). Without `--config`, each
 looks in `/etc/labrat/` and then `~/.config/labrat/`. `labrat nest init` and `labrat rat init` write a starting
 file. Unknown settings are an error, so a typing mistake stops the server with a message saying which.
 
@@ -18,6 +19,7 @@ file. Unknown settings are an error, so a typing mistake stops the server with a
 | `[[tokens]]` | none | who may connect, below |
 | `[devices.<name>]` | none | the devices served, below |
 | `[network]` | none | a private network for the instruments and rats ([network](network.md)) |
+| `[jobs]` | none | where jobs on the workers write their results, nest only ([workers](workers.md#where-results-go)) |
 
 ## Nest settings
 
@@ -87,6 +89,9 @@ OutputEnabled = false                # written on stop, on shutdown and by the w
 Every device may also carry its identity: `kind`, `manufacturer`, `model`, `serial`, `firmware`, `location`
 and `tags` ([naming.md](naming.md)). Instruments that answer `*IDN?` fill in the rest themselves.
 
+`log = "every"` logs every change made to the device through a lease, instead of the first of each kind and a
+count ([safety](safety.md#leases)).
+
 `limits` narrows an attribute's range and can never widen it. `safe` names the value each attribute takes in
 the safe state. It applies to every channel of a per-channel attribute.
 
@@ -100,6 +105,12 @@ See [recordings.md](recordings.md).
 `[experiments]` with `store = "<store>"` gives every person a folder of experiments on that store
 (nest only). See [experiments.md](experiments.md).
 
+## Jobs
+
+`[jobs]` says where jobs write their results: `stores`, a purpose for each store (`data` is the default), `path`,
+each job's folder with Slurm's codes (`"%u/%x-%j"` by default), and `[jobs.people.<person>]` with `stores` of
+their own. See [workers](workers.md#where-results-go).
+
 ## Approvals
 
 ```toml
@@ -107,7 +118,7 @@ approval_minutes = 30              # a request nobody decides on expires after t
 
 [[approvals]]
 who = ["claude", "student-*"]      # token names, shell-style patterns, "*" for everyone
-ops = ["set", "call"]              # set, call and lock
+ops = ["set", "call"]              # set, call, lock and job (starting a job)
 devices = ["*/laser*", "psu"]      # device ids
 names = ["OutputEnabled"]          # attribute or function names
 ```

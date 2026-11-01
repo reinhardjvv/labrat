@@ -76,6 +76,39 @@ asked for by `labrat adopt`, never given on its command line, so they stay out o
 The systemd units run LABRAT as an unprivileged `labrat` user with a read-only system, a private `/tmp` and
 no access to home directories.
 
+## Leases
+
+A lease lets one person, or one of their jobs, talk to devices on a rat directly for a short time, without the
+nest in between (`Client.direct`, [clients](clients.md#straight-to-a-rat)). The safety checks stay where they are:
+
+- The nest grants a lease only to an operator who may change the devices now, never when an `[[approvals]]` rule
+  could make their changes wait, and a job's token only for the job's own devices. It takes the devices' locks for
+  the holder and never passes on god mode.
+- The lease carries the nest's limits for those devices and is signed with the rat's key. The rat checks the
+  signature and the time, applies the nest's limits on top of its own, and refuses changes to the leased devices
+  from anyone but the holder and the nest.
+- A lease is good for the leased devices only, for reading and changing them and for `stop`. Everything else goes
+  through the nest.
+- A lease lasts a minute (at most ten) unless renewed. The nest sends each renewal to the rat as well, and works
+  out the rat's clock from its heartbeat, so a lease ends on time even when the clocks differ. When a lease that
+  changed something runs out, the rat puts its devices in their safe state. A release leaves them as they are,
+  as an unlock does. A `stop` ends every lease, and removing a person revokes theirs and makes their devices safe.
+- The holder checks, before sending anything, that the address it reached proves knowledge of the lease's secret,
+  which only the nest and the real rat can work out.
+- Changes through a lease can come hundreds of times a second. The rat logs the first of each kind in full and
+  counts the rest, with a running SHA-256 over their values, in one line every 10 s and when the lease ends.
+  `log = "every"` on a device logs each one. Long values, such as frames, are kept as their size and hash.
+
+Anything that can hurt someone, such as a laser or high voltage, belongs behind a hardware interlock whatever
+path its commands take.
+
+## Workers
+
+Workers connect out to the nest with signed requests and run what their owners allow ([workers](workers.md#security)).
+A personal worker runs its owner's jobs only; sharing one needs its owner to offer it and an admin to agree.
+A job runs with a clean environment and a token of its own that changes only the devices the job names, and
+`[[approvals]]` with `ops = ["job"]` makes chosen people's or agents' jobs wait for a person.
+
 ## Reporting a vulnerability
 
 See [SECURITY.md](../SECURITY.md).

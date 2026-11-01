@@ -99,6 +99,19 @@ TOOLS = [
      "probe and capture transcripts added as its recordings. A person then adds the device with labrat add.",
      {"toml": {"type": "string"}, "transcripts": {"type": "array", "items": {"type": "string"}}, "rat": {"type": "string"}},
      ["toml"], "profile"),
+    ("labrat_workers", "The computers that run jobs for the lab: owner, whether shared, online, CPUs, memory, GPUs and stores.",
+     {}, [], "workers"),
+    ("labrat_job", "Jobs on the lab's workers. action list (the person's jobs), status, output (what a part printed, from line "
+     "since) or stop, with id; or submit with script (a file name), code (its text), args, and what it needs: on (worker names), "
+     "nodes, cpus, memory_gb, gpus, gpu_memory_gb, exclusive, devices it may change, minutes (time limit), stores (purpose to "
+     "'store' or 'store:path', read in the script with labrat.job.path(purpose)). A job runs as the "
+     "person, may change only the devices it names, and waits in the queue until workers that fit are free.",
+     {"action": {"type": "string", "enum": ["list", "status", "output", "stop", "submit"]}, "id": {"type": "integer"},
+      "script": {"type": "string"}, "code": {"type": "string"}, "args": {"type": "array", "items": {"type": "string"}},
+      "on": {"type": "array", "items": {"type": "string"}}, "nodes": {"type": "integer"}, "cpus": {"type": "integer"},
+      "memory_gb": {"type": "number"}, "gpus": {"type": "integer"}, "gpu_memory_gb": {"type": "number"},
+      "exclusive": {"type": "boolean"}, "devices": {"type": "array", "items": {"type": "string"}}, "minutes": {"type": "number"},
+      "stores": {"type": "object"}, "rank": {"type": "integer"}, "since": {"type": "integer"}}, ["action"], "job"),
     ("labrat_approval", "The state of a request that waits for a person: pending, approved (with its result), denied, failed or expired.",
      {"id": {"type": "string", "description": "the approval id from a 'pending' reply"}}, ["id"], "approval"),
 ]
@@ -130,6 +143,10 @@ def call_tool(client: Client, name: str, args: dict):
     if op == "files":
         msg = {"op": op, **({"name": args["path"]} if args.get("path") else {}),
                "args": {k: args[k] for k in ("offset", "length") if args.get(k) is not None}}
+    if name == "labrat_workers":
+        return client.workers()
+    if name == "labrat_job":
+        return _job_tool(client, args)
     if name == "labrat_scan":
         msg = {"op": "scan", "args": {k: args[k] for k in ("rat", "probe") if args.get(k) is not None}}
     if name in ("labrat_probe", "labrat_capture"):
@@ -154,6 +171,27 @@ def call_tool(client: Client, name: str, args: dict):
     if extra:
         msg["args"] = {**msg.get("args", {}), **extra}
     return client.request(op, **{k: v for k, v in msg.items() if k != "op"})
+
+
+def _job_tool(client: Client, args: dict):
+    action = args.get("action", "list")
+    if action == "list":
+        return client.jobs()
+    if action == "submit":
+        import base64
+        script = str(args.get("script") or "job.py")
+        needs = {k: args[k] for k in ("nodes", "cpus", "memory_gb", "gpus", "gpu_memory_gb") if args.get(k) is not None}
+        spec = {"script": script, "files": {script: base64.b64encode(str(args.get("code", "")).encode()).decode()} if args.get("code") else {},
+                "args": [str(a) for a in args.get("args") or []], "on": list(args.get("on") or []), "needs": needs,
+                "exclusive": bool(args.get("exclusive")), "devices": list(args.get("devices") or []),
+                **({"minutes": args["minutes"]} if args.get("minutes") else {}),
+                **({"stores": args["stores"]} if args.get("stores") else {})}
+        return client.request("job", args={"action": "submit", "spec": spec})
+    if args.get("id") is None:
+        raise LabratError("bad_request", f"{action} needs the job's id")
+    if action == "output":
+        return client.job_output(int(args["id"]), int(args.get("rank", 0)), int(args.get("since", 0)))
+    return client.request("job", name=str(args["id"]), args={"action": action})
 
 
 def summarise(value, limit: int = 200):

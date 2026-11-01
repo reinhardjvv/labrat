@@ -20,6 +20,11 @@ Make a random key of at least 128 bits on first start and keep it. Show it to th
 on a serial console, a display or a web page. Accept `Authorization: Bearer <key>` on every route except
 health.
 
+A rat may also accept leases, so clients can reach it without the nest ([safety](safety.md#leases)): check
+`Authorization: Lease <token>` as `lease.verify` does (the HMAC-SHA256 of the token's first part under the key,
+and its `exp`), allow only the listed devices, and put them in their safe state when a lease that changed something
+runs out. A rat that does not accept leases is reached through the nest, as before.
+
 ## Answer
 
 | Route | Must |

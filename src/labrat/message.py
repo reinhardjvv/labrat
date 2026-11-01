@@ -46,6 +46,9 @@ OPS: dict[str, str] = {
     "capture": "operator",
     "profile": "viewer",
     "device": "operator",
+    "workers": "viewer",       # the computers that run jobs; joining needs an operator, sharing an admin
+    "job": "viewer",           # list and status of your own; starting and stopping need an operator
+    "lease": "operator",       # direct access to a rat's devices for a short time (lease.py)
 }
 ROLES = ("viewer", "operator", "admin")
 

@@ -28,6 +28,31 @@ psus = lab.find("dc-power location=bench*")
 
 Errors arrive as `labrat.message.LabratError`, with `.code` from the error table and a readable `.message`.
 
+Each thread keeps its connection to the nest open between requests. A `bytes` argument, such as a frame for a
+display, travels as the raw body of the request instead of base64:
+
+```python
+lab.call("optics-rat/slm", "ShowImage", data=frame)          # frame is width x height bytes
+```
+
+### Straight to a rat
+
+For fast work with a rat's devices, such as frames for a display or readings from a camera, talk to the rat
+directly. The nest still decides who may, under a lease ([safety](safety.md#leases)):
+
+```python
+with lab.direct("optics-rat/slm") as slm:      # a lease, checked against the rat, on the fastest address
+    print(slm.path)                            # the rat's address that answered first, or "nest"
+    for frame in frames:
+        slm.call("ShowImage", data=frame)
+```
+
+`direct` takes a lease from the nest, asks each of the rat's addresses to prove with the lease's secret that it is
+the real rat, uses the one that answered soonest, and renews the lease in the background. If no address
+answers, it locks the device and goes through the nest instead. Leaving the block releases the lease and leaves
+the device as it is. A script that dies, or a nest that stops answering, lets the lease run out after a minute,
+and the rat then puts the device in its safe state.
+
 ## MATLAB
 
 MATLAB's `webwrite` sends JSON directly, so no toolbox is needed.

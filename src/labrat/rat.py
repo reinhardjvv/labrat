@@ -10,6 +10,7 @@ equipment safe.
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import hmac
 import logging
@@ -20,9 +21,10 @@ import time
 from pathlib import Path
 
 from . import config as conf
+from . import lease as leases
 from .drivers import build
 from .hub import Hub, Principal, token_hash
-from .message import Message
+from .message import LabratError, Message, ok
 
 log = logging.getLogger("labrat")
 
@@ -79,20 +81,124 @@ class Rat(Hub):
         self.last_seen = time.monotonic()
         self.armed = True                         # after a restart, outputs may still be on from before
         self._stop = threading.Event()
+        self.leases: dict[str, dict] = {}         # id -> who, devices, limits, exp (this rat's clock), armed, commands
+        self.ended: dict[str, float] = {}         # leases released, revoked or run out -> their exp, refused until then
         if self.watchdog_s > 0:
             threading.Thread(target=self._watch, name="labrat-watchdog", daemon=True).start()
+        threading.Thread(target=self._lease_watch, name="labrat-leases", daemon=True).start()
 
     def authenticate(self, header):
-        who = super().authenticate(header)
+        if header and header.startswith("Lease "):
+            who = self._lease(header[6:].strip())
+        else:
+            who = super().authenticate(header)
         self.last_seen = time.monotonic()
         return who
 
+    # -- leases: direct access granted by the nest ----------------------------------------------------------
+    def _lease(self, token: str) -> Principal:
+        body = leases.verify(self.key, token)
+        lid = str(body["id"])
+        if lid in self.ended:
+            raise LabratError("unauthorised", f"lease {lid} has ended")
+        devices = tuple(str(d) for d in body["devices"])
+        for d in devices:
+            self.device(d)
+        with self._state:
+            held = self.leases.setdefault(lid, {"who": body["who"], "devices": devices, "armed": False, "commands": 0})
+            held.update(exp=float(body["exp"]), limits=body.get("limits") or {})
+        self.active_at[str(body["who"])] = time.time()
+        return Principal(str(body["who"]), "operator", body.get("for") or None, job=body.get("job"), devices=devices, lease=lid)
+
+    def leased_to(self, device: str) -> tuple[str, dict] | None:
+        now = time.time()
+        for lid, held in list(self.leases.items()):
+            if device in held["devices"] and held["exp"] >= now:
+                return lid, held
+        return None
+
+    def _lease_scope(self, m: Message, who: Principal) -> None:
+        if m.op not in ("health", "list", "describe", "get", "set", "call", "stop"):
+            raise LabratError("forbidden", f"a lease is for {', '.join(who.devices)}; {m.op} goes through the nest")
+        if m.device is not None and m.device not in who.devices:
+            raise LabratError("forbidden", f"lease {who.lease} is for {', '.join(who.devices)}, not {m.device}")
+
+    def end_lease(self, lid: str, why: str, safe: bool) -> dict:
+        """Close a lease: its devices to their safe state if it changed something and safe is set, its log flushed."""
+        with self._state:
+            held = self.leases.pop(lid, None)
+            if held is not None:
+                self.ended[lid] = held["exp"]
+        if held is None:
+            return {"id": lid, "commands": 0}
+        problems = []
+        if safe and held["armed"]:
+            log.warning("lease %s of %s %s: putting %s in the safe state", lid, held["who"], why, ", ".join(held["devices"]))
+            for d in held["devices"]:
+                try:
+                    problems += self.devices[d].make_safe()
+                except Exception as e:
+                    problems.append(f"{d}: {e}")
+        self.flush_streams(lid)
+        self.audit(Principal(held["who"], "operator", lease=lid), {"op": "lease", "name": lid, "args": {
+            "action": why, "commands": held["commands"], **({"safe_state": True} if safe and held["armed"] else {})}}, not problems)
+        return {"id": lid, "commands": held["commands"], **({"problems": problems} if problems else {})}
+
+    def _lease_watch(self) -> None:
+        while not self._stop.wait(0.5):
+            now = time.time()
+            for lid in [lid for lid, h in list(self.leases.items()) if h["exp"] < now]:
+                self.end_lease(lid, "ran out", safe=True)
+            for lid in [lid for lid, exp in list(self.ended.items()) if exp < now - 60]:
+                self.ended.pop(lid, None)
+            self.flush_streams(older_than=10.0)
+
+    def handle(self, obj, who: Principal) -> dict:
+        if who.lease is not None and isinstance(obj, dict):
+            try:
+                self._lease_scope(Message(op=str(obj.get("op")), device=obj.get("device")), who)
+            except LabratError as e:
+                from .message import fail
+                return fail(e, obj.get("id"))
+        return super().handle(obj, who)
+
     def dispatch(self, m: Message, who: Principal) -> dict:
+        if m.op == "lease":
+            if who is not self.nest:
+                raise LabratError("forbidden", "leases are released and revoked by the nest")
+            action = m.args.get("action")
+            if action == "renew":
+                with self._state:
+                    held = self.leases.get(str(m.name))
+                    if held is not None:
+                        held["exp"] = max(held["exp"], float(m.args.get("exp", 0)))
+                return ok({"id": m.name, "known": held is not None})
+            if action not in ("release", "revoke"):
+                raise LabratError("bad_request", "args.action is renew, release or revoke")
+            return ok(self.end_lease(str(m.name), "released" if action == "release" else "revoked", safe=action == "revoke"))
+        if m.op in ("set", "call") and m.device:
+            held = self.leased_to(m.device)
+            if held is not None and who is not self.nest and who.lease != held[0]:
+                raise LabratError("locked", f"{m.device} is leased to {held[1]['who']}")
+            if who.lease is not None and m.op == "set":
+                a = copy.copy(self.device(m.device).attr(m.name))
+                lim = (self.leases.get(who.lease, {}).get("limits") or {}).get(m.device, {}).get(m.name)
+                if lim:
+                    a.narrow(lim.get("min"), lim.get("max"))
+                a.check(m.value)                          # the nest's limits, carried in the lease
         reply = super().dispatch(m, who)
         if m.op in ("set", "call"):
             self.armed = True
+            if who.lease is not None and who.lease in self.leases:
+                self.leases[who.lease]["armed"] = True
+                self.leases[who.lease]["commands"] += 1
         elif m.op == "stop":
             self.armed = False
+            for lid in list(self.leases):
+                self.end_lease(lid, "ended by a stop", safe=False)       # the stop has just made everything safe
+        elif m.op == "health" and who is self.nest:
+            from .discovery import local_addresses
+            reply["value"] = {**reply["value"], "addresses": local_addresses()}
         return reply
 
     def god(self, m: Message, who: Principal) -> bool:
@@ -101,10 +207,12 @@ class Rat(Hub):
             return True
         return who is self.nest and m.args.get("god") is True and self.allow_god_mode
 
-    def health(self, challenge: str | None = None) -> dict:
-        h = {**super().health(), "fingerprint": self.fingerprint, "watchdog_s": self.watchdog_s}
+    def health(self, challenge: str | None = None, lease: str | None = None) -> dict:
+        h = {**super().health(), "fingerprint": self.fingerprint, "watchdog_s": self.watchdog_s, "time": time.time()}
         if challenge:                             # proves this rat holds the key without sending it
             h["proof"] = proof(self.key, challenge)
+            if lease:                             # and, to a lease holder, that it is the rat the lease is for
+                h["lease_proof"] = leases.proof(leases.secret(self.key, lease), challenge)
         return h
 
     def _watch(self) -> None:

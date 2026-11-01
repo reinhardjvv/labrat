@@ -51,6 +51,8 @@ Claude Desktop and other clients, in their MCP configuration:
 | `labrat_record` | `record`: list, start, stop and follow recordings to storage |
 | `labrat_experiment` | `experiment`: start, note and stop an experiment in the person's folder |
 | `labrat_files` | `files`: list the person's experiment folders and read their files back |
+| `labrat_workers` | `workers`: the computers that run jobs and what each has |
+| `labrat_job` | `job`: start a script on the lab's workers, follow its output, stop it ([workers](workers.md#jobs)) |
 
 Long lists of numbers, such as a scope waveform or a VNA trace, come back to the agent as their size, range,
 mean and first values, so they do not fill its context. Scripts using the Python client get the full data.

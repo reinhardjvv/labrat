@@ -11,6 +11,34 @@ All notable changes to LABRAT are recorded here. The format follows
 - `labrat network`: a private network of the nest's or a rat's own, on a spare Ethernet port or a Wi-Fi access
   point, with fixed addresses by MAC address and, by default, no route beyond the computer. NetworkManager runs
   it, and `plan` shows every change before `up` applies it.
+- Workers: computers that run jobs for a nest. `labrat worker join` adds one as its owner's, `--shared` offers it
+  to others once an admin agrees, and `labrat workers` lists each with its CPUs, memory, GPUs and stores. Workers
+  connect out to the nest with HMAC-signed requests and refuse unsigned replies; host details are shown to their
+  owners and admins only.
+- Jobs: `labrat job run` sends a script to the workers, queued until workers that fit are free, with CPUs,
+  memory, GPUs, `--nodes` for a job across several workers started together, `--exclusive`, `--device` and a
+  time limit. Each part runs with a clean environment and a token derived on both sides that acts as the person
+  but changes only the job's devices. `[[approvals]]` can make jobs wait with `ops = ["job"]`. MCP tools
+  `labrat_job` and `labrat_workers`.
+- Clusters: `backend = "slurm"` in `worker.toml` hands each job to Slurm from the login node, with partition,
+  account, extra options, setup lines, a container, a template and every command configurable. A job for several
+  nodes becomes one allocation with `srun` giving each task its rank. `backend = "batch"` drives another
+  scheduler from a template and four commands.
+- Job results go straight from the worker to the lab's stores through its own mounts. `[jobs]` and
+  `[jobs.people.<person>]` give each purpose (`data`, `raw`, ...) a store, `--store` and `--output` choose per
+  job with Slurm's `%j %x %u %N %t`, and `labrat.job.path(purpose)` finds the folder. Workers list every file
+  they wrote for the nest, write `job-<n>.json` beside the results, never write into another job's folder, and
+  can copy results on with a store's `copy` command.
+- Leases and direct paths: `Client.direct("rat/device")` takes a lease from the nest and talks to the rat on its
+  fastest address that proves it is the real rat, renewing in the background and falling back to the nest. The
+  lease carries the nest's limits and is signed with the rat's key; the rat refuses everyone else's changes,
+  ends leases on a stop, and puts the devices in their safe state when a lease that changed something runs out.
+  No lease is granted where approval rules apply, and a job's token gets one only for its own devices.
+- Fast changes through a lease are logged as the first in full and then a count with a running SHA-256 every
+  10 s; `log = "every"` on a device logs each one.
+- A `bytes` argument travels as the raw body of the request (`application/octet-stream`), and the display
+  driver takes frames that way. The Python client keeps each thread's connection open.
+- The audit log keeps long values, such as frames sent to a display, as their size and SHA-256.
 
 ## [0.2.0] - 2026-10-30
 

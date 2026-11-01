@@ -70,6 +70,9 @@ lab.download("2026-10-29_supply-sweep/log.jsonl")
 
 The block stops the experiment even when it fails.
 
+A job sent to the lab's workers while its person has an experiment open writes its results into the
+experiment's folder ([workers](workers.md#where-results-go)).
+
 ## AI agents working for a person
 
 A token can act for a person:

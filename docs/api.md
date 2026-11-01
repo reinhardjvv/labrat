@@ -60,6 +60,9 @@ Unknown fields are refused, which catches typing mistakes.
 | `record` | `name`, `args.action` | viewer, operator to start or stop | without a name: the stores and recordings. With a name: `start` (optionally with a new recording's settings in `args`), `stop` or `status` ([recordings.md](recordings.md)) |
 | `experiment` | `args.action` | viewer, operator to start, stop or note | `list` (yours, or `args.person` for an admin, `*` for all), `status`, `start` with `name` and `args.description`, `note` with `args.text`, or `stop` ([experiments.md](experiments.md)) |
 | `who` | | viewer | the devices someone holds or has changed: holder, minutes left, and the last change (who, when, what), and when each person was last active |
+| `lease` | `args.action` | operator | `grant` with `args.devices` on one rat and `args.minutes` (1 by default, at most 10): the reply holds `lease` (send it to the rat as `Authorization: Lease <lease>`), `secret`, `urls` and `id`; `renew` or `release` with `name` (the id) ([safety](safety.md#leases)) (nest only) |
+| `workers` | | viewer to list, operator to join, admin to share | `list`, `show` with `name`, `join` with `name`, `args.key` and `args.shared` (`labrat worker join` sends these), `share` (admin), `unshare` or `remove` (its owner or an admin) ([workers](workers.md)) (nest only) |
+| `job` | `args.action` | viewer to list, operator to submit or stop | `list` (yours, or `args.person` for an admin, `*` for all), `status`, `output` (`args.rank`, `args.since`) or `stop` with `name` (the job's number), or `submit` with `args.spec`: `script`, `files` (name to base64), `args`, `on`, `needs` (`cpus`, `memory_gb`, `gpus`, `gpu_memory_gb`, `nodes`), `exclusive`, `devices`, `env`, `minutes`, `name`, `stores` (purpose to `store` or `store:path`) and `output` (`store:path`) ([workers](workers.md#jobs)) (nest only) |
 | `users` | `args.action` | viewer to list, admin to add or remove | `list`, `add` with `name`, `args.role` and `args.for` (the reply holds the new token, once), or `remove` with `name` (nest only) |
 | `scan` | | viewer, operator with `args.probe` | what is plugged in and the profiles that fit; `args.rat` runs it on a rat ([catalog](catalog.md)) |
 | `probe` | `args.target` | operator | safe questions to a device: `args.protocol`, `args.baud`, `args.line_ending`, `args.sends` (non-queries wait for approval) |
@@ -103,6 +106,15 @@ the numbers 0 and 1 are accepted for booleans too. Not a number and infinity are
 | `GET /api/v1/health[?challenge=<text>]` | `health`, without a token, for discovery and monitoring. A rat adds `proof`, the HMAC-SHA256 of the challenge under its key |
 | `GET /api/v1/devices` | `list` |
 | `GET /api/v1/devices/<device>` | `describe` |
+
+`GET /api/v1/health?challenge=<text>&lease=<id>` on a rat adds `lease_proof`, the HMAC-SHA256 of the challenge
+under the lease's secret, so a lease holder knows it reached the real rat.
+
+A message can carry one argument as the raw body: `POST /api/v1/message` with `Content-Type:
+application/octet-stream`, the rest of the message as JSON in `X-Labrat-Message`, and the argument's name in
+`X-Labrat-Data` (`data` by default). A frame for a display then travels without base64.
+
+`POST /api/v1/worker` carries a worker's signed requests for work instead of a token ([workers](workers.md#security)).
 
 `GET /api/v1/files/<path>[?person=<person>]` sends a whole file from your experiments, for downloads of any
 size (`labrat files <path> --get`, `Client.download`).

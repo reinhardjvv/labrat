@@ -14,7 +14,7 @@ RAT_PORT = 8781
 
 COMMON = {"name", "host", "port", "state_dir", "discovery", "lock_minutes", "devices", "tokens", "approvals", "approval_minutes", "stores", "recordings",
           "catalog", "network"}
-NEST_KEYS = COMMON | {"limits", "heartbeat_s", "experiments", "require_lock"}
+NEST_KEYS = COMMON | {"limits", "heartbeat_s", "experiments", "require_lock", "jobs"}
 RAT_KEYS = COMMON | {"watchdog_s", "allow_god_mode"}
 
 
