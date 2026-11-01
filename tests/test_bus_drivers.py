@@ -1,11 +1,11 @@
 import json
-import socket
 import sys
 import threading
 import types
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
+from conftest import Listener
 
 from labrat.drivers import build
 from labrat.message import LabratError
@@ -13,28 +13,19 @@ from labrat.message import LabratError
 
 def line_server(answer):
     """A TCP device that answers each line with answer(line), or says nothing when it returns None."""
-    srv = socket.socket()
-    srv.bind(("127.0.0.1", 0))
-    srv.listen()
     seen = []
 
-    def serve():
-        while True:
-            try:
-                conn, _ = srv.accept()
-            except OSError:
-                return
-            with conn:
-                f = conn.makefile("rwb")
-                for raw in f:
-                    line = raw.decode().rstrip("\r\n")
-                    seen.append((raw, line))
-                    out = answer(line)
-                    if out is not None:
-                        f.write(out.encode())
-                        f.flush()
-    threading.Thread(target=serve, daemon=True).start()
-    return srv, srv.getsockname()[1], seen
+    def handle(conn):
+        f = conn.makefile("rwb")
+        for raw in f:
+            line = raw.decode().rstrip("\r\n")
+            seen.append((raw, line))
+            out = answer(line)
+            if out is not None:
+                f.write(out.encode())
+                f.flush()
+    srv = Listener(handle)
+    return srv, srv.port, seen
 
 
 # -- serial -----------------------------------------------------------------------------------------------------

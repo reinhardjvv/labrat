@@ -110,7 +110,7 @@ def test_scpi_instruments_say_who_they_are():
         assert "serial" not in i                                     # '0' means the instrument gave none
     finally:
         dev.close()
-        inst.sock.close()
+        inst.close()
 
 
 def test_the_cli_groups_devices(lab, capsys):
