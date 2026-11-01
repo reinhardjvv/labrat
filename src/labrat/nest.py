@@ -117,8 +117,10 @@ class Nest(Hub):
         self.users = Users(self, state / "users.json")
         from .bench import Workbench
         self.bench = Workbench(self, state)                           # first: it brings back devices added while running
+        from .jobs import Jobs
         from .workers import Workers
         self.workers = Workers(self, state / "workers.json")
+        self.jobs = Jobs(self, self.workers, state)
         self.limits: dict = cfg.get("limits") or {}
         for dev_id, attrs in self.limits.items():
             if "/" not in dev_id and dev_id not in self.devices:

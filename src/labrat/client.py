@@ -201,6 +201,50 @@ class Client:
     def remove_user(self, name: str) -> dict:
         return self.request("users", name=name, args={"action": "remove"})
 
+    # -- workers and jobs -----------------------------------------------------------------------------------
+    def workers(self) -> list[dict]:
+        """The computers that run jobs, with their owner, sharing and what each has."""
+        return self.request("workers", args={"action": "list"})
+
+    def run_job(self, script: str | os.PathLike, files: list | tuple = (), args: list | tuple = (), *, installed: bool = False,
+                on: list | None = None, nodes: int | None = None, cpus: int | None = None, memory_gb: float | None = None,
+                gpus: int | None = None, gpu_memory_gb: float | None = None, exclusive: bool = False, devices: list | tuple = (),
+                env: dict | None = None, minutes: float | None = None, name: str | None = None) -> dict:
+        """Start a job: a script on this computer, sent with the files named, or with installed=True the name of a script
+        already in the worker's scripts folder. It waits in the queue until workers that fit are free:
+
+            job = lab.run_job("fit.py", ["model.py"], ["--steps", "40"], gpus=1)
+            lab.job_output(job["id"])
+        """
+        import base64
+        from pathlib import Path
+        if installed:
+            sent, script_name = {}, str(script)
+        else:
+            paths = [Path(script), *map(Path, files)]
+            sent = {q.name: base64.b64encode(q.read_bytes()).decode() for q in paths}
+            script_name = paths[0].name
+        needs = {k: v for k, v in (("nodes", nodes), ("cpus", cpus), ("memory_gb", memory_gb), ("gpus", gpus),
+                                   ("gpu_memory_gb", gpu_memory_gb)) if v is not None}
+        spec = {"script": script_name, "files": sent, "args": [str(a) for a in args], "on": list(on or []), "needs": needs,
+                "exclusive": exclusive, "devices": list(devices), "env": dict(env or {}),
+                **{k: v for k, v in (("minutes", minutes), ("name", name)) if v is not None}}
+        return self.request("job", args={"action": "submit", "spec": spec})
+
+    def jobs(self, person: str | None = None) -> list[dict]:
+        """Your jobs, newest first (admins may name a person, or '*' for everyone's)."""
+        return self.request("job", args={"action": "list", **({"person": person} if person else {})})
+
+    def job(self, job_id: int) -> dict:
+        return self.request("job", name=str(job_id), args={"action": "status"})
+
+    def job_output(self, job_id: int, rank: int = 0, since: int = 0) -> dict:
+        """What a part of a job printed, from line 'since' on: {text, next, status}."""
+        return self.request("job", name=str(job_id), args={"action": "output", "rank": rank, "since": since})
+
+    def stop_job(self, job_id: int) -> dict:
+        return self.request("job", name=str(job_id), args={"action": "stop"})
+
     # -- the workbench: from an unknown device to a profile and a device ----------------------------------
     def _on(self, rat: str | None, **args) -> dict:
         return {k: v for k, v in {**args, "rat": rat}.items() if v is not None}

@@ -108,7 +108,7 @@ approval_minutes = 30              # a request nobody decides on expires after t
 
 [[approvals]]
 who = ["claude", "student-*"]      # token names, shell-style patterns, "*" for everyone
-ops = ["set", "call"]              # set, call and lock
+ops = ["set", "call"]              # set, call, lock and job (starting a job)
 devices = ["*/laser*", "psu"]      # device ids
 names = ["OutputEnabled"]          # attribute or function names
 ```

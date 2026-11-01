@@ -27,9 +27,11 @@ import os
 import platform
 import secrets
 import shutil
+import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 import tomllib
 import urllib.error
@@ -46,6 +48,7 @@ KEYS = {"nest", "name", "state_dir", "shared", "people", "accept", "scripts", "w
         "memory_gb", "backend", "slots", "link", "link_port", "python", "pass_env", "allow_http", "hash", "stores",
         "slurm", "batch"}
 REPORT_S = 10                    # the computer's state is read at most this often
+GRACE_S = 10                     # after Ctrl-C, a job has this long before SIGTERM, and as long again before SIGKILL
 
 
 def load_config(path: Path) -> dict:
@@ -202,6 +205,9 @@ class Worker:
         self.nest = str(cfg.get("nest") or self.joined.get("nest") or "").rstrip("/")
         self._report: dict = {}
         self._report_t = 0.0
+        self.parts: dict[tuple[int, int], Part] = {}
+        self.wait = 20.0
+        self._stop = threading.Event()
 
     # -- joining --------------------------------------------------------------------------------------------
     def _joined(self) -> dict:
@@ -292,18 +298,226 @@ class Worker:
         me = self.hello()
         log.info("worker %s is online at %s (owner %s, %s)", self.name, self.nest, me["owner"],
                  "shared" if me["shared"] == "yes" else "offered to others, waiting for an admin" if me["shared"] == "asked" else "personal")
-        while True:
+        while not self._stop.is_set():
             try:
                 self.step()
             except LabratError as e:
                 if e.code == "unauthorised":
                     raise
                 log.warning("%s; trying again in 5 s", e.message)
-                time.sleep(5)
+                self._stop.wait(5)
 
-    def step(self, wait: float = 20.0) -> dict:
-        """Ask for work once, waiting up to wait seconds for some."""
-        return self.post("next", {"report": self.report(), "wait": wait}, timeout=wait + 15)
+    def step(self) -> dict:
+        """Ask for work once, waiting up to self.wait seconds for some, and start or stop what the nest says."""
+        running = [{"job": j, "rank": r} for (j, r), part in list(self.parts.items()) if part.alive()]
+        for key in [k for k, part in self.parts.items() if not part.alive()]:
+            self.parts.pop(key, None)
+        reply = self.post("next", {"report": self.report(), "wait": self.wait, "running": running}, timeout=self.wait + 15)
+        for payload in reply.get("parts", []):
+            part = Part(self, payload)
+            self.parts[(part.job, part.rank)] = part
+            part.start()
+        for s in reply.get("stop", []):
+            part = self.parts.get((int(s["job"]), int(s["rank"])))
+            if part is not None:
+                part.stop("stopped from the nest")
+        return reply
+
+    def close(self) -> None:
+        self._stop.set()
+        for part in list(self.parts.values()):
+            part.stop("the worker stopped")
+
+    # -- the owner's rules ----------------------------------------------------------------------------------
+    def refuses(self, payload: dict) -> str | None:
+        """Why this worker will not run a part, or None. These are the owner's rules, checked here whatever the
+        nest says."""
+        from fnmatch import fnmatch
+        cfg, person = self.cfg, str(payload.get("person", ""))
+        owner = self.joined.get("owner")
+        if person != owner and not (cfg["shared"] and any(fnmatch(person, p) for p in cfg["people"])):
+            return f"{self.name} does not take {person}'s jobs"
+        if payload.get("files") and cfg["accept"] != "any":
+            return f"{self.name} runs only scripts already in its scripts folder"
+        if not in_hours(cfg["hours"]) or (cfg["when"] == "idle" and not idle()):
+            return f"{self.name} is not taking work now"
+        if payload.get("exclusive") and any(g["busy"] for g in gpus()):
+            return f"{self.name}'s GPUs are in use"
+        return None
+
+
+class Part:
+    """One part of a job, run on this computer as a process of its own with a clean environment."""
+
+    def __init__(self, worker: Worker, payload: dict):
+        self.w, self.p = worker, payload
+        self.job, self.rank = int(payload["job"]), int(payload["rank"])
+        self.dir = Path(worker.cfg["state_dir"]) / "jobs" / f"{self.job}-{self.rank}"
+        self.proc: subprocess.Popen | None = None
+        self._why: str | None = None
+        self._stopped_at: float | None = None
+        self._thread = threading.Thread(target=self.run, name=f"labrat-job-{self.job}-{self.rank}", daemon=True)
+        self._lines: list[str] = []
+        self._lines_lock = threading.Lock()
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def alive(self) -> bool:
+        return self._thread.is_alive() or not self._thread.ident
+
+    def stop(self, why: str) -> None:
+        if self._why is None:
+            self._why = why
+
+    def _send(self, action: str, **body) -> dict:
+        return self.w.post(action, {"job": self.job, "rank": self.rank, **body})
+
+    # -- getting it ready -----------------------------------------------------------------------------------
+    def command(self) -> list[str]:
+        from .jobs import decode_files
+        p, cfg = self.p, self.w.cfg
+        script = str(p["script"])
+        if p.get("files"):
+            decode_files(p["files"], self.dir)
+            path = self.dir / script
+        else:
+            folder = Path(str(cfg.get("scripts") or "")).expanduser().resolve()
+            path = (folder / script).resolve()
+            if not cfg.get("scripts") or not path.is_relative_to(folder) or not path.is_file():
+                raise LabratError("not_found", f"{script} is not in {self.w.name}'s scripts folder")
+        if path.suffix == ".py":
+            return [cfg["python"], str(path), *p.get("args", [])]
+        if path.suffix == ".sh":
+            return ["/bin/sh", str(path), *p.get("args", [])]
+        if not p.get("files") and os.access(path, os.X_OK):
+            return [str(path), *p.get("args", [])]
+        raise LabratError("bad_request", f"{script}: a job runs a .py or .sh script, or a program in the scripts folder")
+
+    def environment(self) -> dict:
+        """A clean environment: what a program needs to run, what the owner passes on, the job's own variables,
+        and LABRAT's. Nothing else from the worker's own environment reaches the job."""
+        from .jobs import part_token
+        p, cfg = self.p, self.w.cfg
+        env = {k: os.environ[k] for k in ("PATH", "LANG", "LC_ALL", "LC_CTYPE", "TZ") if k in os.environ}
+        env.setdefault("PATH", "/usr/local/bin:/usr/bin:/bin")
+        user = os.environ.get("USER") or os.environ.get("LOGNAME") or ""
+        env.update(HOME=os.environ.get("HOME") or str(Path.home()), USER=user, LOGNAME=user, SHELL="/bin/sh",
+                   TMPDIR=str(self.dir / "tmp"), PYTHONUNBUFFERED="1")
+        env.update({k: os.environ[k] for k in cfg["pass_env"] if k in os.environ})
+        env.update({str(k): str(v) for k, v in (p.get("env") or {}).items()})
+        n = int(p["world_size"])
+        env.update(LABRAT_URL=self.w.nest, LABRAT_TOKEN=part_token(self.w.key, self.job, self.rank), LABRAT_JOB=str(self.job),
+                   LABRAT_JOB_NAME=str(p["name"]), LABRAT_RANK=str(self.rank), LABRAT_WORLD_SIZE=str(n),
+                   LABRAT_LEADER=str(p["leader"]), LABRAT_WORKER=self.w.name,
+                   MASTER_ADDR=str(p["leader"]), MASTER_PORT=str(p["port"]), RANK=str(self.rank), WORLD_SIZE=str(n), LOCAL_RANK="0")
+        devices = self.gpus()
+        if devices is not None:
+            env["CUDA_VISIBLE_DEVICES"] = ",".join(map(str, devices))
+        return env
+
+    def gpus(self) -> list[int] | None:
+        """The GPUs this part may use: as many free ones as it asked for, within the owner's limit."""
+        want, limit = (self.p.get("needs") or {}).get("gpus"), self.w.cfg.get("gpus")
+        if want is None and limit is None:
+            return None
+        found = gpus()
+        free = [g["index"] for g in found if not g["busy"]] or [g["index"] for g in found]
+        n = int(want) if want is not None else len(found)
+        return free[:min(n, limit) if limit is not None else n]
+
+    def cpus(self) -> None:
+        want = (self.p.get("needs") or {}).get("cpus") or self.w.cfg.get("cpus")
+        if want and hasattr(os, "sched_setaffinity") and self.proc is not None:
+            try:
+                os.sched_setaffinity(self.proc.pid, sorted(os.sched_getaffinity(0))[:int(want)])
+            except OSError as e:
+                log.warning("job %d: cannot limit it to %s CPUs: %s", self.job, want, e)
+
+    # -- running it -----------------------------------------------------------------------------------------
+    def run(self) -> None:
+        code, error = None, None
+        try:
+            why = self.w.refuses(self.p)
+            if why:
+                raise LabratError("forbidden", why)
+            if self.dir.exists():
+                shutil.rmtree(self.dir)
+            (self.dir / "tmp").mkdir(parents=True, mode=0o700)
+            cmd = self.command()
+            self.proc = subprocess.Popen(cmd, cwd=self.dir, env=self.environment(), stdout=subprocess.PIPE,
+                                         stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
+            self.cpus()
+            log.info("job %d rank %d (%s for %s) started", self.job, self.rank, self.p["name"], self.p["person"])
+            if self._send("started").get("stop"):
+                self.stop("stopped from the nest")
+            code, error = self._watch()
+        except LabratError as e:
+            error = e.message
+        except OSError as e:
+            error = f"could not start it: {e}"
+        finally:
+            self._flush()
+            for _ in range(5):
+                try:
+                    self._send("done", code=code, **({"error": error} if error else {}))
+                    break
+                except LabratError:
+                    time.sleep(2)
+            shutil.rmtree(self.dir, ignore_errors=True)
+            log.info("job %d rank %d ended: %s", self.job, self.rank, error or f"exit code {code}")
+
+    def _read(self) -> None:
+        for raw in self.proc.stdout:
+            with self._lines_lock:
+                self._lines.append(raw.decode(errors="replace").rstrip("\n"))
+
+    def _flush(self) -> bool:
+        """Send what the job printed since last time. True when the nest asks for it to stop."""
+        with self._lines_lock:
+            text, self._lines = "\n".join(self._lines), []
+        if not text:
+            return False
+        try:
+            return bool(self._send("output", text=text).get("stop"))
+        except LabratError:
+            with self._lines_lock:
+                self._lines.insert(0, text)
+            return False
+
+    def _watch(self) -> tuple[int, str | None]:
+        reader = threading.Thread(target=self._read, daemon=True)
+        reader.start()
+        limit = self.p.get("minutes")
+        started = time.monotonic()
+        while self.proc.poll() is None or reader.is_alive():
+            reader.join(0.5)
+            if self._flush():
+                self.stop("stopped from the nest")
+            if limit and time.monotonic() - started > float(limit) * 60:
+                self.stop(f"the time limit of {float(limit):g} min was reached")
+            if self._why is not None and self.proc.poll() is None:
+                self._signal()
+        code = self.proc.wait()
+        error = self._why if self._why and self._why != "stopped from the nest" else None
+        return code, error
+
+    def _signal(self) -> None:
+        """Ctrl-C first, so the job can clean up and leave its devices safe; then SIGTERM; then SIGKILL."""
+        now = time.monotonic()
+        if self._stopped_at is None:
+            self._stopped_at = now
+            sig = signal.SIGINT
+        elif now - self._stopped_at > 2 * GRACE_S:
+            sig = signal.SIGKILL
+        elif now - self._stopped_at > GRACE_S:
+            sig = signal.SIGTERM
+        else:
+            return
+        try:
+            os.killpg(self.proc.pid, sig)
+        except OSError:
+            pass
 
 
 def load_or_create_key(state_dir: Path) -> str:

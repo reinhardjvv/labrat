@@ -80,6 +80,8 @@ no access to home directories.
 
 Workers connect out to the nest with signed requests and run what their owners allow ([workers](workers.md#security)).
 A personal worker runs its owner's jobs only; sharing one needs its owner to offer it and an admin to agree.
+A job runs with a clean environment and a token of its own that changes only the devices the job names, and
+`[[approvals]]` with `ops = ["job"]` makes chosen people's or agents' jobs wait for a person.
 
 ## Reporting a vulnerability
 

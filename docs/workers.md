@@ -41,6 +41,94 @@ of the lab's stores it can reach with their free space. Everyone sees these. Its
 LABRAT versions, addresses and link address are shown to its owner and to admins only. `labrat who` lists the
 workers with the devices.
 
+## Jobs
+
+A job is a script, its arguments and what it needs. The nest queues it and starts it on workers that take the
+person's jobs, are taking work now, have a free slot and fit what it needs.
+
+```bash
+labrat job run fit.py model.py --gpus 1               # fit.py runs; model.py travels with it
+labrat job run train.py --nodes 2 --exclusive         # two workers at once, to itself
+labrat job run sweep.py --on gpu-box -- --steps 40    # what follows -- goes to the script
+labrat job run known.py --installed                   # a script already in the worker's scripts folder
+labrat jobs                                           # yours, newest first
+labrat job output 12 -f                               # what rank 0 prints, as it prints it
+labrat job show 12                                    # every part, its worker, state and exit code
+labrat job stop 12
+```
+
+| Option | Meaning |
+| --- | --- |
+| `--on` | these workers, comma-separated, in this order |
+| `--nodes` | how many workers at once (by default one, or as many as `--on` names) |
+| `--cpus`, `--memory`, `--gpus`, `--gpu-memory` | what each part needs; `--memory` and `--gpu-memory` in GB |
+| `--exclusive` | wait until the workers run nothing else and their GPUs are free |
+| `--device` | a device the job may change (repeat it for more) |
+| `--env NAME=VALUE` | an environment variable for the script |
+| `--minutes` | the time limit, after which the job is stopped |
+| `--name` | a name for the job (by default the script's) |
+
+A `.py` script runs with the worker's Python, a `.sh` script with `/bin/sh`. At most 16 MB of files travel with a
+job. From Python, `Client().run_job("fit.py", ["model.py"], ["--steps", "40"], gpus=1)` does the same, and an AI
+agent has `labrat_job` and `labrat_workers` ([MCP](mcp.md)).
+
+### Where it runs
+
+Without `--on`, the nest prefers the person's own workers, then idle ones, then the least loaded. A worker runs
+as many jobs at once as its `slots`, and none while it is not taking work (`when`, `hours`). A worker that takes
+only installed scripts (`accept = "scripts"`) is never given a script that travels with a job. The worker checks
+its owner's rules again before it runs anything, whatever the nest says.
+
+### Several workers at once
+
+A job with `--nodes 2` or more starts only when that many workers are free, and every part starts at the same
+time. Each part gets its place in its environment, under LABRAT's names and the ones `torch.distributed` and
+similar libraries read:
+
+| Variable | Meaning |
+| --- | --- |
+| `LABRAT_RANK`, `RANK` | this part, from 0 |
+| `LABRAT_WORLD_SIZE`, `WORLD_SIZE` | how many parts |
+| `LABRAT_LEADER`, `MASTER_ADDR` | rank 0's address: its `link` address when it has one, so the parts talk over the fast link |
+| `MASTER_PORT` | rank 0's `link_port` (29500) |
+| `LABRAT_JOB`, `LABRAT_JOB_NAME`, `LABRAT_WORKER` | the job, its name and the worker |
+
+The parts talk to each other directly, at whatever speed the link between the workers gives; none of that
+traffic passes through the nest. When one part fails, the nest stops the others.
+
+### Inside a job
+
+```python
+from labrat import job
+
+lab = job.client()                           # the nest, with this part's own token
+if job.rank == 0:
+    lab.note(f"fitting on {job.world_size} workers")
+```
+
+Each part runs with a token of its own, which the nest and the worker both derive from the worker's key, so it
+never travels. It acts as the person who sent the job, with their limits, locks and approval rules, but changes
+only the devices the job names with `--device`. It cannot start other jobs, recordings, people, workers or
+approvals, and it stops working when the part ends. The audit log records the person with the job's number.
+
+### Stopping
+
+`labrat job stop` sends each part Ctrl-C (SIGINT), so a script can clean up and leave its devices safe, then
+SIGTERM after 10 s and SIGKILL after 20 s. The time limit stops a job the same way. The nest keeps every job's
+record in `<state_dir>/jobs/`, and a job that was queued or running when the nest stopped is marked failed when
+it starts again.
+
+### Agents
+
+An AI agent's token starts jobs like its person's, as long as no approval rule says otherwise. To have its jobs
+wait for a person:
+
+```toml
+[[approvals]]
+who = ["claude-*"]
+ops = ["job"]
+```
+
 ## worker.toml
 
 `labrat worker` reads `worker.toml` from `--config`, `/etc/labrat/` or `~/.config/labrat/`. Unknown settings are an
@@ -81,6 +169,12 @@ error. Every setting is optional except `nest`, which `labrat worker join --url`
   requests from being forged or changed, but not from being read: for anything beyond the lab network, put the
   nest behind TLS or reach it over a VPN.
 - **The owner's settings stay with the owner.** Whose jobs, when, how much and which code are set in
-  `worker.toml` on the computer. The nest cannot change them.
+  `worker.toml` on the computer. The nest cannot change them, and the worker checks them again for every job.
+- **A clean environment.** A job sees `PATH`, `HOME`, `USER`, the locale, a temporary folder of its own, the
+  variables the owner names in `pass_env`, its own `--env` and LABRAT's. Nothing else from the worker's
+  environment, such as the owner's API keys, reaches it. Run the worker as a user of its own (`labrat service
+  worker`) so a job cannot read its owner's files either.
+- **Tokens that end with the job.** A part's token is derived on both sides, never sent, limited to the
+  job's devices and removed when the part ends.
 - **Private details stay private.** Host names, addresses and platforms are shown to the worker's owner and to
   admins, never to other people or their agents.

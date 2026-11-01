@@ -15,6 +15,12 @@ All notable changes to LABRAT are recorded here. The format follows
   to others once an admin agrees, and `labrat workers` lists each with its CPUs, memory, GPUs and stores. Workers
   connect out to the nest with HMAC-signed requests and refuse unsigned replies; host details are shown to their
   owners and admins only.
+- Jobs: `labrat job run` sends a script to the workers, queued until workers that fit are free, with CPUs,
+  memory, GPUs, `--nodes` for a job across several workers started together, `--exclusive`, `--device` and a
+  time limit. Each part runs with a clean environment and a token derived on both sides that acts as the person
+  but changes only the job's devices. `[[approvals]]` can make jobs wait with `ops = ["job"]`. MCP tools
+  `labrat_job` and `labrat_workers`.
+- The audit log keeps long values, such as frames sent to a display, as their size and SHA-256.
 
 ## [0.2.0] - 2026-10-30
 

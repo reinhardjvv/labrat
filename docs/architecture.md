@@ -45,6 +45,7 @@ its key. The fingerprint lets that person check they adopt the rat in front of t
 A worker is a computer that runs jobs for the nest ([workers](workers.md)). It connects out to the nest and asks
 for work with requests signed by the key it shares with the nest, so it needs no open port and its key never
 travels after it joins. Its owner decides what it takes; an admin decides whether it is shared with others.
+The nest queues jobs and places each on workers that fit, all parts of a job across several workers at once.
 
 ## Heartbeat and watchdog
 
@@ -68,7 +69,9 @@ lost Wi-Fi link then leaves the equipment safe.
 | `labrat/nest.py` | the nest, rat links and adoption |
 | `labrat/rat.py` | the rat, its key and its watchdog |
 | `labrat/workers.py` | the nest's workers: joining, sharing and what each reports |
-| `labrat/worker.py` | a worker: `worker.toml`, its key and what the computer has |
+| `labrat/worker.py` | a worker: `worker.toml`, its key, what the computer has, and running each part of a job |
+| `labrat/jobs.py` | jobs: checking, queueing and placing them, groups across workers, and their tokens |
+| `labrat/job.py` | what a script running as a job imports: its rank, world size and client |
 | `labrat/signing.py` | signed requests and replies between the nest and its workers |
 | `labrat/http.py` | the HTTP server |
 | `labrat/discovery.py` | multicast DNS announcement and browsing |
