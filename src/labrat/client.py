@@ -5,39 +5,94 @@
     lab.set("bench-rat/psu", "VoltageLevel", 3.3, channel="1")
     with lab.locked("bench-rat/psu"):
         lab.set("bench-rat/psu", "OutputEnabled", True, channel="1")
+
+Each thread keeps its connection open between requests. lab.direct("bench-rat/slm") talks to a rat's device
+without the nest in between, under a lease (lease.py).
 """
 from __future__ import annotations
 
+import hmac
+import http.client
 import json
+import logging
 import os
+import secrets
+import threading
+import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from contextlib import contextmanager
 from typing import Any
 
 from .message import LabratError
 
+log = logging.getLogger("labrat")
+
 
 class Client:
-    def __init__(self, url: str | None = None, token: str | None = None, timeout: float = 30.0):
+    def __init__(self, url: str | None = None, token: str | None = None, timeout: float = 30.0, scheme: str = "Bearer"):
         self.url = (url or os.environ.get("LABRAT_URL") or "http://127.0.0.1:8780").rstrip("/")
         self.token = token if token is not None else os.environ.get("LABRAT_TOKEN", "")
         self.timeout = timeout
+        self.scheme = scheme                         # "Lease" when talking to a rat directly
+        self._local = threading.local()
+
+    def _conn(self, fresh: bool = False) -> http.client.HTTPConnection:
+        c = getattr(self._local, "conn", None)
+        if c is None or fresh:
+            if c is not None:
+                c.close()
+            u = urllib.parse.urlsplit(self.url)
+            cls = http.client.HTTPSConnection if u.scheme == "https" else http.client.HTTPConnection
+            c = cls(u.hostname, u.port, timeout=self.timeout)
+            self._local.conn = c
+        return c
+
+    def _post(self, body: bytes, headers: dict) -> tuple[int, bytes]:
+        """POST to the message endpoint on this thread's open connection, opening a new one if the server closed it."""
+        path = urllib.parse.urlsplit(self.url).path.rstrip("/") + "/api/v1/message"
+        headers = {**headers, "Authorization": f"{self.scheme} {self.token}"}
+        for attempt in (0, 1):
+            reused = getattr(self._local, "conn", None) is not None and attempt == 0
+            c = self._conn(fresh=attempt == 1)
+            try:
+                c.request("POST", path, body=body, headers=headers)
+                r = c.getresponse()
+                data = r.read()
+            except (http.client.RemoteDisconnected, ConnectionResetError, BrokenPipeError) as e:
+                c.close()
+                self._local.conn = None
+                if reused:
+                    continue                         # an idle connection the server had closed: once more, fresh
+                raise LabratError("unavailable", f"cannot reach {self.url}: {e}") from None
+            except (OSError, http.client.HTTPException) as e:
+                c.close()
+                self._local.conn = None
+                raise LabratError("unavailable", f"cannot reach {self.url}: {e}") from None
+            if (r.getheader("Connection") or "").lower() == "close":
+                c.close()
+                self._local.conn = None
+            return r.status, data
+        raise LabratError("unavailable", f"cannot reach {self.url}")
 
     def send(self, msg: dict | list) -> Any:
-        """Send one message (or a list) and return the reply as it came."""
-        req = urllib.request.Request(self.url + "/api/v1/message", data=json.dumps(msg).encode(), method="POST",
-                                     headers={"Content-Type": "application/json", "Authorization": f"Bearer {self.token}"})
+        """Send one message (or a list) and return the reply as it came. A message whose args hold bytes, such as a
+        frame for a display, travels with those bytes as the raw body."""
+        args = msg.get("args") if isinstance(msg, dict) else None
+        raw = [k for k, v in (args or {}).items() if isinstance(v, (bytes, bytearray))]
+        if raw:
+            if len(raw) > 1:
+                raise LabratError("bad_request", "only one argument can travel as raw bytes")
+            head = {**msg, "args": {k: v for k, v in args.items() if k != raw[0]}}
+            status, data = self._post(bytes(args[raw[0]]), {"Content-Type": "application/octet-stream",
+                                                            "X-Labrat-Message": json.dumps(head), "X-Labrat-Data": raw[0]})
+        else:
+            status, data = self._post(json.dumps(msg).encode(), {"Content-Type": "application/json"})
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as r:
-                return json.loads(r.read())
-        except urllib.error.HTTPError as e:
-            try:
-                return json.loads(e.read())
-            except ValueError:
-                raise LabratError("unavailable", f"{self.url} answered HTTP {e.code}") from None
-        except OSError as e:
-            raise LabratError("unavailable", f"cannot reach {self.url}: {e}") from None
+            return json.loads(data)
+        except ValueError:
+            raise LabratError("unavailable", f"{self.url} answered HTTP {status}") from None
 
     def request(self, op: str, **fields) -> Any:
         """Send one message and return its value, or raise its error as a LabratError."""
@@ -201,6 +256,26 @@ class Client:
     def remove_user(self, name: str) -> dict:
         return self.request("users", name=name, args={"action": "remove"})
 
+    # -- leases: talking to a rat's devices directly ------------------------------------------------------
+    def lease(self, *devices: str, minutes: float | None = None) -> dict:
+        """A lease on devices of one rat: the token, the secret that proves the rat is real, and its addresses."""
+        return self.request("lease", args={"action": "grant", "devices": list(devices), **({"minutes": minutes} if minutes else {})})
+
+    def renew_lease(self, lease_id: str) -> dict:
+        return self.request("lease", name=lease_id, args={"action": "renew"})
+
+    def release_lease(self, lease_id: str) -> dict:
+        return self.request("lease", name=lease_id, args={"action": "release"})
+
+    def direct(self, device: str, minutes: float = 1.0) -> DirectDevice:
+        """A rat's device without the nest in between, on the fastest path that answers, renewed in the background:
+
+            with lab.direct("optics-rat/slm") as slm:
+                for frame in frames:
+                    slm.call("ShowImage", data=frame)            # bytes go as the raw body
+        """
+        return DirectDevice(self, device, minutes)
+
     # -- workers and jobs -----------------------------------------------------------------------------------
     def workers(self) -> list[dict]:
         """The computers that run jobs, with their owner, sharing and what each has."""
@@ -323,3 +398,96 @@ class Device:
 
     def locked(self, minutes: float | None = None):
         return self.client.locked(self.id, minutes)
+
+
+class DirectDevice(Device):
+    """A rat's device reached directly under a lease. The nest still decides who may have it, and its limits travel
+    in the lease; the rat checks them. If no address of the rat answers as the real rat, it goes through the nest."""
+
+    def __init__(self, client: Client, device: str, minutes: float = 1.0):
+        super().__init__(client, device)
+        self.nest = client
+        self.lease = client.lease(device, minutes=minutes)
+        self.local = device.partition("/")[2]
+        self.path = "nest"
+        self.url = self._fastest()
+        self._stop = threading.Event()
+        if self.url is None:                                  # nothing answered: the nest, with a lock, as usual
+            client.release_lease(self.lease["id"])
+            client.lock(device, minutes)
+            self.rat = None
+            return
+        self.path = self.url
+        self.rat = Client(self.url, self.lease["lease"], client.timeout, scheme="Lease")
+        threading.Thread(target=self._renew, name=f"labrat-lease-{device}", daemon=True).start()
+
+    def __repr__(self) -> str:
+        return f"<labrat device {self.id} via {self.path}>"
+
+    def _fastest(self) -> str | None:
+        """The rat's address that answers soonest and proves, with the lease's secret, that it is the rat."""
+        from . import lease as leases
+        found: list[tuple[float, str]] = []
+
+        def ask(url: str) -> None:
+            challenge = secrets.token_hex(16)
+            t0 = time.perf_counter()
+            try:
+                q = f"?challenge={challenge}&lease={self.lease['id']}"
+                with urllib.request.urlopen(url + "/api/v1/health" + q, timeout=1.5) as r:
+                    h = json.loads(r.read()).get("value") or {}
+            except (OSError, ValueError):
+                return
+            if hmac.compare_digest(str(h.get("lease_proof", "")), leases.proof(self.lease["secret"], challenge)):
+                found.append((time.perf_counter() - t0, url))
+        threads = [threading.Thread(target=ask, args=(u,), daemon=True) for u in self.lease["urls"]]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(2.0)
+        return min(found)[1] if found else None
+
+    def _renew(self) -> None:
+        every = max(5.0, float(self.lease["minutes"]) * 60 / 3)
+        while not self._stop.wait(every):
+            try:
+                self.lease = {**self.lease, **self.nest.renew_lease(self.lease["id"])}
+                self.rat.token = self.lease["lease"]
+            except LabratError as e:
+                log.warning("cannot renew the lease on %s: %s; it ends by itself", self.id, e.message)
+
+    def _on(self) -> tuple[Client, str]:
+        return (self.rat, self.local) if self.rat is not None else (self.nest, self.id)
+
+    def describe(self) -> dict:
+        c, d = self._on()
+        return c.describe(d)
+
+    def get(self, name: str, channel: str | None = None) -> Any:
+        c, d = self._on()
+        return c.get(d, name, channel)
+
+    def set(self, name: str, value: Any, channel: str | None = None) -> Any:
+        c, d = self._on()
+        return c.set(d, name, value, channel)
+
+    def call(self, name: str, channel: str | None = None, **args) -> Any:
+        c, d = self._on()
+        return c.call(d, name, channel, **args)
+
+    def close(self) -> None:
+        """Release the lease (or the lock), leaving the device as it is."""
+        self._stop.set()
+        try:
+            if self.rat is not None:
+                self.nest.release_lease(self.lease["id"])
+            else:
+                self.nest.unlock(self.id)
+        except LabratError as e:
+            log.warning("releasing %s: %s", self.id, e.message)
+
+    def __enter__(self) -> DirectDevice:
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()

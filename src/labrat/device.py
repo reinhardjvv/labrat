@@ -153,6 +153,8 @@ def convert(kind: str, value: Any, name: str = "value") -> Any:
             if isinstance(value, bool) or (isinstance(value, float) and not value.is_integer()):
                 raise ValueError
             return int(value)
+        if isinstance(value, (bytes, bytearray)):             # a binary frame sent as the body of the request
+            return bytes(value)
         return str(value)
     except (TypeError, ValueError):
         raise LabratError("bad_request", f"{name}: {value!r} is not a valid {kind}") from None
@@ -185,6 +187,8 @@ class Device:
         for attr, value in (self.config.get("safe") or {}).items():
             a = self.attr(attr)
             self.safe[attr] = convert(a.type, value, attr)
+        if self.config.get("log", "stream") not in ("stream", "every"):
+            raise LabratError("bad_request", f"{self.name}: log is \"stream\" (fast changes through a lease counted) or \"every\"")
 
     def limit(self, attr: str, lim: dict) -> None:
         if not isinstance(lim, dict):

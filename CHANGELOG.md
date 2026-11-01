@@ -29,6 +29,15 @@ All notable changes to LABRAT are recorded here. The format follows
   job with Slurm's `%j %x %u %N %t`, and `labrat.job.path(purpose)` finds the folder. Workers list every file
   they wrote for the nest, write `job-<n>.json` beside the results, never write into another job's folder, and
   can copy results on with a store's `copy` command.
+- Leases and direct paths: `Client.direct("rat/device")` takes a lease from the nest and talks to the rat on its
+  fastest address that proves it is the real rat, renewing in the background and falling back to the nest. The
+  lease carries the nest's limits and is signed with the rat's key; the rat refuses everyone else's changes,
+  ends leases on a stop, and puts the devices in their safe state when a lease that changed something runs out.
+  No lease is granted where approval rules apply, and a job's token gets one only for its own devices.
+- Fast changes through a lease are logged as the first in full and then a count with a running SHA-256 every
+  10 s; `log = "every"` on a device logs each one.
+- A `bytes` argument travels as the raw body of the request (`application/octet-stream`), and the display
+  driver takes frames that way. The Python client keeps each thread's connection open.
 - The audit log keeps long values, such as frames sent to a display, as their size and SHA-256.
 
 ## [0.2.0] - 2026-10-30

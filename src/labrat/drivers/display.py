@@ -8,8 +8,8 @@ The driver writes frames straight into the Linux framebuffer, so no desktop is n
 image and give the rat's user the video group). Size and pixel format come from /sys/class/graphics; width,
 height and bits_per_pixel in the configuration override them.
 
-ShowImage takes an 8-bit grey frame as base64, width x height bytes row by row, or a PNG when Pillow is
-installed. ShowPattern draws blank, grating (binary or blazed, vertical or horizontal) and checkerboard.
+ShowImage takes an 8-bit grey frame, width x height bytes row by row, as base64 or as the raw body of the
+request (Client.call with bytes), or a PNG when Pillow is installed. ShowPattern draws blank, grating (binary or blazed, vertical or horizontal) and checkerboard.
 The safe state is a blank screen at level 0.
 """
 from __future__ import annotations
@@ -76,9 +76,9 @@ class Display(Device):
         return {"showing": self.showing, "width": self.width, "height": self.height}
 
     # -- frames ---------------------------------------------------------------------------------------------
-    def _decode(self, data: str, fmt: str) -> bytes:
+    def _decode(self, data: str | bytes, fmt: str) -> bytes:
         try:
-            raw = base64.b64decode(data, validate=True)
+            raw = data if isinstance(data, bytes) else base64.b64decode(data, validate=True)
         except ValueError:
             raise LabratError("bad_request", "data is not base64") from None
         if fmt == "png":

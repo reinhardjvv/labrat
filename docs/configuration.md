@@ -89,6 +89,9 @@ OutputEnabled = false                # written on stop, on shutdown and by the w
 Every device may also carry its identity: `kind`, `manufacturer`, `model`, `serial`, `firmware`, `location`
 and `tags` ([naming.md](naming.md)). Instruments that answer `*IDN?` fill in the rest themselves.
 
+`log = "every"` logs every change made to the device through a lease, instead of the first of each kind and a
+count ([safety](safety.md#leases)).
+
 `limits` narrows an attribute's range and can never widen it. `safe` names the value each attribute takes in
 the safe state. It applies to every channel of a per-channel attribute.
 

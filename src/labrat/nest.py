@@ -7,6 +7,7 @@ checks each one every heartbeat_s seconds, and follows a rat to a new address wh
 """
 from __future__ import annotations
 
+import base64
 import copy
 import hmac
 import json
@@ -14,10 +15,12 @@ import logging
 import os
 import secrets
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+from fnmatch import fnmatch
 from pathlib import Path
 
 from . import config as conf
@@ -38,6 +41,28 @@ class RatLink:
         self.name, self.url, self.key, self.fingerprint = name, url.rstrip("/"), key, fingerprint
         self.online = False
         self.described: dict[str, dict] = {}
+        self.offset = 0.0                        # the rat's clock minus the nest's, so leases end on the rat's time
+        self.addresses: list[str] = []           # where else the rat can be reached, for direct paths
+
+    def learn(self, health) -> None:
+        """Note the rat's clock and addresses from its health, asked with its key."""
+        if isinstance(health, dict):
+            if isinstance(health.get("time"), (int, float)):
+                self.offset = float(health["time"]) - time.time()
+            if isinstance(health.get("addresses"), list):
+                self.addresses = [str(a) for a in health["addresses"][:16]]
+
+    def urls(self) -> list[str]:
+        """The rat's adopted address first, then the same port on its other addresses."""
+        from urllib.parse import urlsplit
+        u = urlsplit(self.url)
+        out = [self.url]
+        for a in self.addresses:
+            host = f"[{a}]" if ":" in a else a
+            url = f"{u.scheme}://{host}:{u.port}" if u.port else f"{u.scheme}://{host}"
+            if url not in out:
+                out.append(url)
+        return out
 
     def send(self, msg: dict, timeout: float = 10.0) -> dict:
         req = urllib.request.Request(self.url + "/api/v1/message", data=json.dumps(msg).encode(), method="POST",
@@ -144,6 +169,7 @@ class Nest(Hub):
                 self.rats[name] = RatLink(name, r["url"], r["key"], r.get("fingerprint", ""))
         self.browser = Browser() if (cfg.get("discovery", True) if browse is None else browse) else None
         self.heartbeat_s = float(cfg.get("heartbeat_s", 5.0))
+        self.leases: dict[str, dict] = {}                             # id -> rat, devices, holder, until
         self._stop = threading.Event()
         threading.Thread(target=self._heartbeat, name="labrat-heartbeat", daemon=True).start()
 
@@ -161,9 +187,11 @@ class Nest(Hub):
             for rat in list(self.rats.values()):
                 self._follow(rat)
                 try:
-                    rat.ask({"op": "health"}, timeout=3)
+                    rat.learn(rat.ask({"op": "health"}, timeout=3))
                 except LabratError:
                     pass
+            for lid in [lid for lid, le in list(self.leases.items()) if le["_until"] < time.monotonic()]:
+                self.leases.pop(lid, None)
 
     def _follow(self, rat: RatLink) -> None:
         """Move to a new address discovery reports for this rat, once the rat there proves it holds the key."""
@@ -200,6 +228,7 @@ class Nest(Hub):
         health = link.ask({"op": "health"})
         if not isinstance(health, dict) or health.get("fingerprint") != link.fingerprint:
             raise LabratError("unauthorised", f"the rat at {url} does not have that key")
+        link.learn(health)
         self.rats[name] = link
         self._save()
         log.info("adopted rat %s at %s", name, url)
@@ -263,7 +292,86 @@ class Nest(Hub):
         return a
 
     # -- messages -------------------------------------------------------------------------------------------
+    # -- leases -------------------------------------------------------------------------------------------
+    def lease_op(self, m: Message, who: Principal) -> dict:
+        """Grant, renew or release direct access to devices on one rat (lease.py)."""
+        from . import lease
+        action = m.args.get("action", "grant")
+        if action in ("renew", "release"):
+            le = self.leases.get(m.name or "")
+            if le is None:
+                raise LabratError("not_found", f"no lease {m.name!r}; it may have run out")
+            if le["who"] != who.name and not (action == "release" and who.role == "admin"):
+                raise LabratError("forbidden", f"lease {le['id']} is {le['who']}'s")
+            if action == "release":
+                return self.release_lease(le["id"], who)
+            devices, minutes, lid = le["devices"], le["minutes"], le["id"]
+        elif action == "grant":
+            devices = [str(d) for d in (m.args.get("devices") or ([m.device] if m.device else []))]
+            minutes = float(m.args.get("minutes") or lease.MINUTES_DEFAULT)
+            if not devices or not 0 < minutes <= lease.MINUTES_MAX:
+                raise LabratError("bad_request", f"a lease needs devices on one rat and minutes up to {lease.MINUTES_MAX:g}")
+            lid = secrets.token_hex(8)
+        else:
+            raise LabratError("bad_request", "args.action is grant, renew or release")
+        rats = {d.partition("/")[0] for d in devices}
+        if len(rats) != 1 or not all("/" in d for d in devices):
+            raise LabratError("bad_request", "a lease is for devices on one rat ('<rat>/<device>'); the nest's own devices go through the nest")
+        rat, _ = self._remote(devices[0])
+        for d in devices:
+            if who.devices is not None and d not in who.devices:
+                raise LabratError("forbidden", f"job {who.job} may change only {', '.join(who.devices) or 'no devices'}, not {d}")
+            for r in self.rules:
+                if (any(fnmatch(who.name, w) for w in r.who) and {"set", "call"} & set(r.ops)
+                        and any(fnmatch(d, p) for p in r.devices)):
+                    raise LabratError("forbidden", f"changes to {d} by {who.name} may wait for approval, so they go through the nest")
+            self._describe_remote(d)
+        for d in devices:
+            self.lock(d, who, minutes)                         # refused if someone else holds one
+        limits = {d.partition("/")[2]: lim for d in devices if (lim := self.limits.get(d))}
+        body = {"id": lid, "rat": rat.name, "devices": [d.partition("/")[2] for d in devices], "who": who.name,
+                "for": who.for_, "job": who.job, "limits": limits, "exp": time.time() + rat.offset + minutes * 60}
+        self.leases[lid] = {"id": lid, "rat": rat.name, "devices": devices, "who": who.name, "minutes": minutes,
+                            "_until": time.monotonic() + minutes * 60}
+        if action == "renew":                                  # the rat learns the new end even if the holder is idle
+            try:
+                rat.ask({"op": "lease", "name": lid, "args": {"action": "renew", "exp": body["exp"]}}, timeout=5)
+            except LabratError as e:
+                log.warning("lease %s: could not tell %s it was renewed: %s", lid, rat.name, e.message)
+        return {"id": lid, "lease": lease.sign(rat.key, body), "secret": lease.secret(rat.key, lid), "rat": rat.name,
+                "devices": devices, "urls": rat.urls(), "minutes": minutes}
+
+    def release_lease(self, lid: str, who: Principal) -> dict:
+        le = self.leases.pop(lid, None)
+        if le is None:
+            raise LabratError("not_found", f"no lease {lid!r}")
+        for d in le["devices"]:
+            if self.holder(d) == le["who"]:
+                with self._state:
+                    self.locks.pop(d, None)
+        summary = {}
+        rat = self.rats.get(le["rat"])
+        if rat is not None:
+            try:
+                summary = rat.ask({"op": "lease", "name": lid, "args": {"action": "release"}}, timeout=5) or {}
+            except LabratError as e:
+                summary = {"error": e.message}
+        return {"id": lid, "released": True, **({"rat": summary} if summary else {})}
+
+    def forget_person(self, name: str) -> None:
+        super().forget_person(name)
+        for lid in [lid for lid, le in self.leases.items() if le["who"] == name]:
+            le = self.leases.pop(lid)
+            rat = self.rats.get(le["rat"])
+            if rat is not None:
+                try:
+                    rat.ask({"op": "lease", "name": lid, "args": {"action": "revoke"}}, timeout=5)
+                except LabratError:
+                    log.warning("could not revoke lease %s on %s; it runs out by itself", lid, le["rat"])
+
     def dispatch(self, m: Message, who: Principal) -> dict:
+        if m.op == "lease":
+            return ok(self.lease_op(m, who))
         if m.op == "rats":
             return ok(self.rat_list())
         if m.op == "adopt":
@@ -281,6 +389,8 @@ class Nest(Hub):
             return super().dispatch(m, who)
         fwd = {**m.to_dict(), "device": local}
         fwd.pop("id", None)
+        if isinstance(fwd.get("args"), dict):                  # a binary frame travels on to the rat as base64
+            fwd["args"] = {k: base64.b64encode(v).decode() if isinstance(v, (bytes, bytearray)) else v for k, v in fwd["args"].items()}
         args = {k: v for k, v in (fwd.pop("args", None) or {}).items() if k != "god"}   # never passed on from a client
         if m.op == "set" and who.god:
             args["god"] = True

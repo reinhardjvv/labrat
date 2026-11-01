@@ -40,6 +40,13 @@ A rat announces itself on the local network with multicast DNS (service `_labrat
 carries its name, version and key fingerprint. The nest lists rats it can see, and a person adopts one with
 its key. The fingerprint lets that person check they adopt the rat in front of them.
 
+## Leases
+
+The nest is the way in, but it need not carry every byte. A lease, signed with the rat's key, lets one holder
+talk to a rat's devices directly for a short time, with the nest's limits inside it and the rat's watchdog behind
+it ([safety](safety.md#leases)). The client picks the rat's fastest address, so frames, waveforms and streams go
+from the rat to where they are used and the nest carries only control.
+
 ## Workers
 
 A worker is a computer that runs jobs for the nest ([workers](workers.md)). It connects out to the nest and asks
@@ -73,6 +80,7 @@ lost Wi-Fi link then leaves the equipment safe.
 | `labrat/batch.py` | jobs handed to Slurm or another batch scheduler from a cluster's login node |
 | `labrat/jobs.py` | jobs: checking, queueing and placing them, groups across workers, and their tokens |
 | `labrat/job.py` | what a script running as a job imports: its rank, world size and client |
+| `labrat/lease.py` | leases: signed, short permissions to talk to a rat's devices directly |
 | `labrat/signing.py` | signed requests and replies between the nest and its workers |
 | `labrat/http.py` | the HTTP server |
 | `labrat/discovery.py` | multicast DNS announcement and browsing |

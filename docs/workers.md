@@ -108,6 +108,10 @@ if job.rank == 0:
     lab.note(f"fitting on {job.world_size} workers")
 ```
 
+A job that drives a device on a rat, such as a display fed from a GPU, reaches it directly:
+`job.client().direct("optics-rat/slm")` takes a lease for one of the job's devices and talks to the rat on its
+fastest address, without the nest in between ([clients](clients.md#straight-to-a-rat)).
+
 Each part runs with a token of its own, which the nest and the worker both derive from the worker's key, so it
 never travels. It acts as the person who sent the job, with their limits, locks and approval rules, but changes
 only the devices the job names with `--device`. It cannot start other jobs, recordings, people, workers or
