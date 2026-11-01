@@ -86,6 +86,7 @@ class Hub:
         self.last_change: dict[str, dict] = {}                        # device -> who changed it last, when and how
         self.users = None                                             # set by the nest: people added while it runs
         self.bench = None                                             # scan, probe, capture, profiles, devices added live
+        self.workers = None                                           # set by the nest: computers that run jobs
         self._ctx = threading.local()
         if require_lock is True:
             self.require_lock = ["*"]
@@ -119,7 +120,7 @@ class Hub:
             reply = self.dispatch(msg, who)
             if msg.op in ("set", "call", "lock", "unlock", "stop", "adopt", "forget", "deny", "probe") or (
                     msg.op in ("device", "capture", "profile") and msg.args.get("action") in ("add", "remove", "start", "stop", "save")) or (
-                    msg.op == "users" and msg.args.get("action") in ("add", "remove")) or (
+                    msg.op in ("users", "workers") and msg.args.get("action") in ("add", "remove", "join", "share", "unshare")) or (
                     msg.op in ("record", "experiment") and msg.args.get("action") in ("start", "stop", "note")):
                 self.audit(who, msg, True)
             reply.setdefault("id", msg_id) if msg_id is not None else None
@@ -156,6 +157,10 @@ class Hub:
             if self.bench is None:
                 raise LabratError("not_found", f"this {self.role} has no workbench")
             return ok(self.bench.op(m, who))
+        if m.op == "workers":
+            if self.workers is None:
+                raise LabratError("not_found", f"workers join a nest; this is a {self.role}")
+            return ok(self.workers.op(m, who))
         if m.op == "users":
             if self.users is None:
                 raise LabratError("not_found", f"users are added at the nest; this is a {self.role}")
@@ -337,7 +342,15 @@ class Hub:
         people = [{"name": n, "last_active": time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(t))}
                   for n, t in sorted(self.active_at.items(), key=lambda x: -x[1]) if n != "nest"]
         return {"devices": devices, "people": people,
-                **({"require_lock": self.require_lock} if self.require_lock else {})}
+                **({"require_lock": self.require_lock} if self.require_lock else {}),
+                **({"workers": self.workers.who()} if self.workers is not None and self.workers.entries else {})}
+
+    def worker_request(self, header: str | None, body: bytes) -> tuple[int, bytes, str | None]:
+        """A signed request from a worker (workers.py). Only a nest has workers."""
+        if self.workers is None:
+            err = LabratError("not_found", f"workers join a nest; this is a {self.role}")
+            return err.status, json.dumps(fail(err)).encode(), None
+        return self.workers.request(header, body)
 
     # -- approvals ------------------------------------------------------------------------------------------
     def ask_approval(self, m: Message, who: Principal) -> LabratError:

@@ -76,6 +76,11 @@ asked for by `labrat adopt`, never given on its command line, so they stay out o
 The systemd units run LABRAT as an unprivileged `labrat` user with a read-only system, a private `/tmp` and
 no access to home directories.
 
+## Workers
+
+Workers connect out to the nest with signed requests and run what their owners allow ([workers](workers.md#security)).
+A personal worker runs its owner's jobs only; sharing one needs its owner to offer it and an admin to agree.
+
 ## Reporting a vulnerability
 
 See [SECURITY.md](../SECURITY.md).

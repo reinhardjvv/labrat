@@ -8,8 +8,9 @@
                                      a device's stream (camera video, live readings), sent as it comes
     GET  /api/v1/files/<path>[?person=<person>]
                                      a file from your own experiments, whole (admins may name another person)
+    POST /api/v1/worker              a worker's signed request for work (nest only, workers.py)
 
-Every route but health needs 'Authorization: Bearer <token>'.
+Every route but health and worker needs 'Authorization: Bearer <token>'. A worker signs each request instead.
 """
 from __future__ import annotations
 
@@ -143,8 +144,27 @@ def make_handler(hub: Hub):
             finally:
                 streams.release()
 
+        def _worker(self) -> None:
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                length = -1
+            if not 0 <= length <= MAX_BODY:
+                return self._send(400, fail(LabratError("bad_request", f"send a JSON body of at most {MAX_BODY} bytes")))
+            status, data, signature = hub.worker_request(self.headers.get("Authorization"), self.rfile.read(length))
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            if signature:
+                self.send_header("X-Labrat-Signature", signature)
+            self.end_headers()
+            self.wfile.write(data)
+
         def do_POST(self):
             path = self.path.split("?")[0].rstrip("/")
+            if path == "/api/v1/worker":
+                return self._worker()
             try:
                 who = hub.authenticate(self.headers.get("Authorization"))
                 if path != "/api/v1/message":

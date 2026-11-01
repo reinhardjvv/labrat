@@ -142,6 +142,65 @@ def cmd_rat(a) -> int:
     return serve("rat", conf.load("rat", conf.find("rat", a.config)), Rat)
 
 
+def _worker_config(given: str | None) -> dict:
+    from .worker import load_config
+    return load_config(conf.find("worker", given))
+
+
+def cmd_worker(a) -> int:
+    from .rat import fingerprint
+    from .worker import Worker, check_config, config_text
+    st = _st()
+    if a.action == "init":
+        path = Path(a.config).expanduser() if a.config else _default_new_path("worker")
+        nest = a.url or os.environ.get("LABRAT_URL") or f"http://nest.local:{conf.NEST_PORT}"
+        _write_new(path, config_text(socket.gethostname().split(".")[0], nest, _state_line()))
+        print(f"wrote {path}; then: labrat worker join")
+        return 0
+    if a.action in ("share", "unshare", "remove", "show"):
+        if not a.name:
+            raise LabratError("bad_request", f"labrat worker {a.action} <name>")
+        return _show(_client(a).request("workers", name=a.name, args={"action": a.action})) or 0
+    try:
+        cfg = _worker_config(a.config)
+    except LabratError:
+        if a.action != "join":
+            raise
+        cfg = check_config({})                         # joining before writing worker.toml uses the defaults
+    if a.shared:
+        cfg["shared"] = True
+    w = Worker(cfg)
+    if a.action == "key":
+        print(f"worker       {w.name}\nfingerprint  {fingerprint(w.key)}\njoined       {w.joined.get('nest', 'not yet')}")
+        return 0
+    if a.action == "join":
+        r = w.join(a.url, a.token)
+        state = {"no": "personal: it runs your jobs only",
+                 "asked": "offered to others: an admin agrees with labrat worker share " + r["name"]}.get(r["shared"], r["shared"])
+        print(f"{st.bold(r['name'])} joined {r['nest']} as {r['owner']}'s worker, {state}\n"
+              f"fingerprint {r['fingerprint']}\n\nstart it with: labrat worker")
+        return 0
+    w.run_forever()
+    return 0
+
+
+def cmd_workers(a):
+    from .term import table
+    st, rows = _st(), _client(a).request("workers", args={"action": "list"})
+    if a.json:
+        return _show(rows)
+    out = []
+    for w in rows:
+        gpus = ", ".join(f"{g['name']} {g['memory_gb']:g} GB" for g in w.get("gpus", [])) or st.dim("none")
+        state = st.good("online") if w["online"] else st.dim("offline")
+        shared = {"yes": "shared", "asked": st.warn("offered"), "no": st.dim("personal")}[w["shared"]]
+        what = f"{w.get('cpus', '?')} CPUs" + (f", {w['memory_gb']:g} GB" if w.get("memory_gb") else "")
+        if w.get("backend", "local") != "local":
+            what = w["backend"]
+        out.append([st.bold(w["name"]), w["owner"], shared, state, what, gpus])
+    print(table(["WORKER", "OWNER", "SHARING", "STATE", "HAS", "GPUS"], out, st, indent=0) if out else "no workers have joined")
+
+
 def cmd_demo(a) -> int:
     """A nest on this computer with simulated devices, to try everything without hardware."""
     from .nest import Nest
@@ -650,7 +709,7 @@ def _group_exists(grp, name: str) -> bool:
 def cmd_service(a):
     exe = Path(sys.argv[0]).resolve() if Path(sys.argv[0]).name == "labrat" else Path(sys.executable).with_name("labrat")
     import grp
-    wanted = ("dialout", "gpio", "video", "plugdev") if a.kind == "rat" else ()
+    wanted = {"rat": ("dialout", "gpio", "video", "plugdev"), "worker": ("video", "render")}.get(a.kind, ())
     groups = " ".join(g for g in wanted if _group_exists(grp, g))
     print(UNIT.format(kind=a.kind, exe=exe, groups=groups).replace("SupplementaryGroups=\n", ""), end="")
 
@@ -746,6 +805,12 @@ def main(argv=None) -> int:
     s.add_argument("action", nargs="?", choices=["run", "init", "key"], default="run")
     s.add_argument("--config")
     s.set_defaults(fn=cmd_rat)
+    s = sub.add_parser("worker", help="run a worker (a computer that runs jobs), or init, join, key; share, unshare, remove")
+    s.add_argument("action", nargs="?", choices=["run", "init", "join", "key", "show", "share", "unshare", "remove"], default="run")
+    s.add_argument("name", nargs="?", help="the worker, for show, share, unshare and remove")
+    s.add_argument("--config")
+    s.add_argument("--shared", action="store_true", help="offer it to other people as well (join)")
+    s.set_defaults(fn=cmd_worker)
     s = sub.add_parser("demo", help="a demo lab with simulated instruments")
     s.add_argument("--port", type=int, default=conf.NEST_PORT)
     s.set_defaults(fn=cmd_demo)
@@ -756,8 +821,8 @@ def main(argv=None) -> int:
     s.add_argument("--name", required=True)
     s.add_argument("--role", choices=ROLES, default="operator")
     s.set_defaults(fn=cmd_token)
-    s = sub.add_parser("service", help="print a systemd unit for a nest or rat")
-    s.add_argument("kind", choices=["nest", "rat"])
+    s = sub.add_parser("service", help="print a systemd unit for a nest, rat or worker")
+    s.add_argument("kind", choices=["nest", "rat", "worker"])
     s.set_defaults(fn=cmd_service)
     s = sub.add_parser("drivers", help="the device drivers this installation has")
     s.set_defaults(fn=lambda a: [print(f"{k:<14} {v}") for k, v in sorted(__import__("labrat.drivers", fromlist=["available"]).available().items())])
@@ -826,6 +891,7 @@ def main(argv=None) -> int:
                (("--person",), {}), js)
     client_cmd("who", "who holds each device, who changed it last, who was active", cmd_who, js)
     client_cmd("users", "the users of this nest", cmd_users, js)
+    client_cmd("workers", "the computers that run jobs, and what each has", cmd_workers, js)
     client_cmd("user", "add or remove a user (admins), with no restart", cmd_user,
                (("action",), {"choices": ["add", "remove"]}), "name",
                (("--role",), {"choices": ROLES, "default": "operator"}),

@@ -185,6 +185,7 @@ experiment ([experiments](docs/experiments.md)).
 | [MCP](docs/mcp.md) | AI agents through the Model Context Protocol |
 | [Drivers](docs/drivers.md) | the built-in drivers and how to write one |
 | [Recordings](docs/recordings.md) | readings, waveforms and streams written to storage on a schedule |
+| [Workers](docs/workers.md) | computers that run jobs for the lab, and who may use them |
 | [Catalog and reverse engineering](docs/catalog.md) | device profiles, scanning, probing and capturing unknown devices |
 | [Experiments](docs/experiments.md) | each person's work in their own folder, with its commands, settings, notes and recordings |
 | [A network of its own](docs/network.md) | a private Ethernet or Wi-Fi network for the instruments and rats, with fixed addresses |

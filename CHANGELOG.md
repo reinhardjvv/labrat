@@ -11,6 +11,10 @@ All notable changes to LABRAT are recorded here. The format follows
 - `labrat network`: a private network of the nest's or a rat's own, on a spare Ethernet port or a Wi-Fi access
   point, with fixed addresses by MAC address and, by default, no route beyond the computer. NetworkManager runs
   it, and `plan` shows every change before `up` applies it.
+- Workers: computers that run jobs for a nest. `labrat worker join` adds one as its owner's, `--shared` offers it
+  to others once an admin agrees, and `labrat workers` lists each with its CPUs, memory, GPUs and stores. Workers
+  connect out to the nest with HMAC-signed requests and refuse unsigned replies; host details are shown to their
+  owners and admins only.
 
 ## [0.2.0] - 2026-10-30
 

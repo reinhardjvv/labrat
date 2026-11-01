@@ -40,6 +40,12 @@ A rat announces itself on the local network with multicast DNS (service `_labrat
 carries its name, version and key fingerprint. The nest lists rats it can see, and a person adopts one with
 its key. The fingerprint lets that person check they adopt the rat in front of them.
 
+## Workers
+
+A worker is a computer that runs jobs for the nest ([workers](workers.md)). It connects out to the nest and asks
+for work with requests signed by the key it shares with the nest, so it needs no open port and its key never
+travels after it joins. Its owner decides what it takes; an admin decides whether it is shared with others.
+
 ## Heartbeat and watchdog
 
 The nest asks every adopted rat for its health every few seconds (`heartbeat_s`, 5 s by default). It marks
@@ -61,6 +67,9 @@ lost Wi-Fi link then leaves the equipment safe.
 | `labrat/hub.py` | what nest and rat share: tokens, locks, stop, audit |
 | `labrat/nest.py` | the nest, rat links and adoption |
 | `labrat/rat.py` | the rat, its key and its watchdog |
+| `labrat/workers.py` | the nest's workers: joining, sharing and what each reports |
+| `labrat/worker.py` | a worker: `worker.toml`, its key and what the computer has |
+| `labrat/signing.py` | signed requests and replies between the nest and its workers |
 | `labrat/http.py` | the HTTP server |
 | `labrat/discovery.py` | multicast DNS announcement and browsing |
 | `labrat/client.py` | the Python client |

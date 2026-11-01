@@ -1,6 +1,7 @@
 # Configuration
 
-A nest reads `nest.toml` and a rat reads `rat.toml`, both in [TOML](https://toml.io). Without `--config`, each
+A nest reads `nest.toml` and a rat reads `rat.toml`, both in [TOML](https://toml.io). A worker reads
+`worker.toml` ([workers](workers.md#workertoml)). Without `--config`, each
 looks in `/etc/labrat/` and then `~/.config/labrat/`. `labrat nest init` and `labrat rat init` write a starting
 file. Unknown settings are an error, so a typing mistake stops the server with a message saying which.
 
