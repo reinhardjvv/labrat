@@ -6,6 +6,8 @@ All notable changes to LABRAT are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-01
+
 ### Added
 
 - `labrat network`: a private network of the nest's or a rat's own, on a spare Ethernet port or a Wi-Fi access
@@ -96,6 +98,7 @@ First release of LABRAT as a nest, rats and one message API.
 - An install script and systemd units for nests and rats.
 - Adoption and address changes that send a rat's key only after the rat proves it holds it (HMAC challenge).
 
-[Unreleased]: https://github.com/reinhardjvv/labrat/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/reinhardjvv/labrat/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/reinhardjvv/labrat/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/reinhardjvv/labrat/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/reinhardjvv/labrat/releases/tag/v0.1.0
