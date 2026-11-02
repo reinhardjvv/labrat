@@ -6,6 +6,8 @@ All notable changes to LABRAT are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-02
+
 ### Added
 
 - Setup describes the computer in full on Linux, ARM boards and macOS: model and architecture, system, processor
@@ -20,11 +22,6 @@ All notable changes to LABRAT are recorded here. The format follows
   in (`labrat joins` lists those waiting). Operators approve their own personal workers; shared computers,
   someone else's and rats need an admin. Join keys (`labrat key new`) let a set number of computers in until
   they run out, with no approval.
-
-## [0.3.0] - 2026-11-01
-
-### Added
-
 - `labrat network`: a private network of the nest's or a rat's own, on a spare Ethernet port or a Wi-Fi access
   point, with fixed addresses by MAC address and, by default, no route beyond the computer. NetworkManager runs
   it, and `plan` shows every change before `up` applies it.
